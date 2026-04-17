@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Test reports (generated - don't commit)
+selenium/reports/
+jmeter/reports/
+*.html
+*.jtl
+
+# Secrets
+.env
+*.env
+firebase_service_account.json
+secrets/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,51 @@
+name: Selenium Tool Test CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:           # cho phép chạy thủ công
+
+jobs:
+  selenium-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Install Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Run Selenium tests
+        run: |
+          cd selenium/scripts
+          pytest test_login.py test_rbac_roles.py test_quiz_core.py \
+            --html=../reports/selenium_report.html \
+            --self-contained-html \
+            -v --tb=short
+        continue-on-error: true
+
+      - name: Upload test report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selenium-report
+          path: selenium/reports/selenium_report.html
+
+      - name: Upload updated Excel results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: excel-results
+          path: data/*.xlsx
