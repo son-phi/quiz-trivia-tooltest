@@ -142,7 +142,7 @@ Mỗi test case thực hiện **3 bước**:
 
 | Thành viên | MSSV | Phụ trách Tool |
 |-----------|------|----------------|
-| Trần Tiến Dũng | B22DCCN140 | Selenium – F1 Auth/RBAC |
+|  Phí Quốc Tư Sơn  | B22DCAT249 | Selenium – F1 Auth/RBAC |
 | Nguyễn Thị Thùy Dương | B22DCAT067 | Selenium – F3 Quiz CRUD |
-| Phạm Xuân Quý | B22DCAT240 | Postman – API Testing |
-| Phí Quốc Tư Sơn | B22DCAT249 | JMeter – Performance |
+| Trần Tiến Dũng | B22DCCN140 | Postman – API Testing |
+| Phạm Xuân Quý | B22DCAT240 | JMeter – Performance |
