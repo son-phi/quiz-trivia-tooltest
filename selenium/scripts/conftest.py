@@ -42,7 +42,15 @@ def driver():
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--window-size=1920,1080")
     opts.add_argument("--disable-notifications")
-    service = Service(ChromeDriverManager().install())
+    # webdriver_manager 4.x bug: install() may return THIRD_PARTY_NOTICES instead
+    # of chromedriver.exe. Resolve the real executable from the same directory.
+    raw_path = ChromeDriverManager().install()
+    driver_path = Path(raw_path)
+    if driver_path.suffix != ".exe" and not driver_path.name.startswith("chromedriver"):
+        candidate = driver_path.parent / "chromedriver.exe"
+        if candidate.exists():
+            raw_path = str(candidate)
+    service = Service(raw_path)
     drv = webdriver.Chrome(service=service, options=opts)
     drv.implicitly_wait(10)
     yield drv
