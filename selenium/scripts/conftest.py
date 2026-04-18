@@ -33,9 +33,9 @@ TEST_ACCOUNTS = {
 }
 
 # ── Selenium driver fixture ──────────────────────────────────────────────────
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def driver():
-    """Headless Chrome driver – shared across the session."""
+    """Headless Chrome driver – one fresh instance per test (prevents Chrome memory crash)."""
     opts = Options()
     opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")

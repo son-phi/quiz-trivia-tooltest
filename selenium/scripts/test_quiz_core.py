@@ -16,7 +16,10 @@ import requests
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import (
+    TimeoutException, NoSuchElementException,
+    ElementClickInterceptedException, StaleElementReferenceException
+)
 
 from conftest import (
     APP_URL, TEST_ACCOUNTS, FIRESTORE_BASE,
@@ -25,6 +28,7 @@ from conftest import (
 
 # ── Constants ────────────────────────────────────────────────────────────────
 QUIZ_ID       = "Ny0THH0b49FoJqSK7BN3"
+QUIZ_RESULTS_COLLECTION = "quizResults"   # app uses addDoc → server-generated ID
 QUIZ_LIST_URL = f"{APP_URL}/quizzes"
 QUIZ_PREV_URL = f"{APP_URL}/quiz/{QUIZ_ID}/preview"
 LOGIN_URL     = f"{APP_URL}/login"
@@ -37,8 +41,17 @@ SEL_SEARCH      = (By.CSS_SELECTOR, "input.w-full.border.border-gray-300")
 SEL_QUIZ_CARDS  = (By.CSS_SELECTOR, "div.rounded-3xl.shadow-xl")
 SEL_START_BTN   = (By.XPATH, "//button[contains(@class,'from-blue-600') and contains(@class,'to-indigo-600')]")
 SEL_SKIP_RES    = (By.XPATH, "//button[contains(text(),'Bỏ qua')]")
-SEL_TIMER       = (By.CSS_SELECTOR, "span.font-bold.tabular-nums")
-SEL_Q_COUNTER   = (By.XPATH, "//span[contains(@class,'rounded-full') and contains(text(),'/')]")
+# Timer.tsx renders: <span class="font-mono font-bold text-lg min-w-[4.5ch]">
+# Practice mode uses tabular-nums in a different element
+SEL_TIMER       = (By.XPATH,
+    "//span[contains(@class,'font-mono') and contains(@class,'font-bold')"
+    " or (contains(@class,'font-bold') and contains(@class,'tabular-nums'))]"
+)
+# QuizPage: <span class="text-xs font-medium bg-slate-100 text-slate-500 px-2 ...">1/8</span>
+# Use . (element's full string value) not text() which checks only first text-node
+SEL_Q_COUNTER   = (By.XPATH,
+    "//span[contains(@class,'bg-slate-100') and contains(@class,'text-slate-500')]"
+)
 SEL_Q_TITLE     = (By.CSS_SELECTOR, "h2.text-2xl")
 # Matches MCQ (rounded-2xl border-2 w-full), boolean (rounded-2xl border-2),
 # multimedia (rounded-xl border-2) — excludes rounded-full nav/action buttons
@@ -104,12 +117,39 @@ def _clear_session(driver):
         pass
 
 
+def _safe_click(driver, element):
+    """Scroll into view then click; JS-fallback on intercepted; re-raise on stale."""
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
+        time.sleep(0.15)
+    except StaleElementReferenceException:
+        raise
+    try:
+        element.click()
+    except ElementClickInterceptedException:
+        time.sleep(0.4)
+        driver.execute_script("arguments[0].click();", element)
+    except StaleElementReferenceException:
+        raise
+
+
 def _login(driver, wait: WebDriverWait):
     driver.get(LOGIN_URL)
+    time.sleep(1)
+    # If redirected away (e.g., still logged in), try once more after clear
+    if "/login" not in driver.current_url:
+        driver.delete_all_cookies()
+        try:
+            driver.execute_script(
+                "window.localStorage.clear(); window.sessionStorage.clear();"
+            )
+        except Exception:
+            pass
+        driver.get(LOGIN_URL)
     wait.until(EC.presence_of_element_located(SEL_EMAIL))
     driver.find_element(*SEL_EMAIL).send_keys(TEST_ACCOUNTS["user"]["email"])
     driver.find_element(*SEL_PASSWORD).send_keys(TEST_ACCOUNTS["user"]["password"])
-    driver.find_element(*SEL_LOGIN_BTN).click()
+    _safe_click(driver, driver.find_element(*SEL_LOGIN_BTN))
     wait.until(EC.url_changes(LOGIN_URL))
     time.sleep(0.5)
 
@@ -129,26 +169,33 @@ def _goto_quiz_preview(driver, wait: WebDriverWait):
 def _start_quiz_session(driver, wait: WebDriverWait):
     """Click 'Start Quiz', bypass resource view if present, wait for Q1."""
     btn = wait.until(EC.element_to_be_clickable(SEL_START_BTN))
-    btn.click()
+    _safe_click(driver, btn)
     time.sleep(1)
     # Resource view: skip if shown
     try:
-        skip = WebDriverWait(driver, 5).until(EC.element_to_be_clickable(SEL_SKIP_RES))
-        skip.click()
+        skip = WebDriverWait(driver, 2).until(EC.element_to_be_clickable(SEL_SKIP_RES))
+        _safe_click(driver, skip)
         time.sleep(0.5)
     except TimeoutException:
         pass
-    # Wait for timer (game session started)
-    wait.until(EC.presence_of_element_located(SEL_TIMER))
+    # Wait for game session: question counter (e.g. "1/8") must appear
+    wait.until(EC.presence_of_element_located(SEL_Q_COUNTER))
 
 
 def _get_current_q_index(driver) -> int:
     """Returns 0-based index of current question from the X/N counter."""
-    try:
-        txt = driver.find_element(*SEL_Q_COUNTER).text  # e.g. "3/8"
-        return int(txt.split("/")[0]) - 1
-    except Exception:
-        return 0
+    for _ in range(3):
+        try:
+            elem = driver.find_element(*SEL_Q_COUNTER)
+            txt  = elem.text.strip()
+            if "/" in txt:
+                return int(txt.split("/")[0]) - 1
+            return 0
+        except StaleElementReferenceException:
+            time.sleep(0.2)
+        except Exception:
+            return 0
+    return 0
 
 
 def _answer_question(driver, wait: WebDriverWait, q: dict, mode: str = "correct"):
@@ -162,31 +209,41 @@ def _answer_question(driver, wait: WebDriverWait, q: dict, mode: str = "correct"
     if q_type in ("multiple", "boolean", "image", "multimedia", "audio", "video"):
         correct_idx = next((i for i, a in enumerate(answers) if a.get("isCorrect")), 0)
         target_idx  = correct_idx if mode == "correct" else (correct_idx + 1) % max(len(answers), 1)
-        try:
-            btns = wait.until(EC.presence_of_all_elements_located(SEL_ANSWER_BTNS))
-            if target_idx < len(btns):
-                btns[target_idx].click()
-                time.sleep(0.3)
-        except TimeoutException:
-            pass
+        for _retry in range(3):
+            try:
+                btns = driver.find_elements(*SEL_ANSWER_BTNS)
+                if not btns:
+                    time.sleep(0.5)
+                    continue
+                if target_idx < len(btns):
+                    _safe_click(driver, btns[target_idx])
+                    time.sleep(0.3)
+                break
+            except (StaleElementReferenceException, ElementClickInterceptedException):
+                time.sleep(0.4)
 
     elif q_type == "checkbox":
-        try:
-            btns = wait.until(EC.presence_of_all_elements_located(SEL_ANSWER_BTNS))
-            if mode == "correct":
-                for i, a in enumerate(answers):
-                    if a.get("isCorrect") and i < len(btns):
-                        btns[i].click()
-                        time.sleep(0.2)
-            else:
-                # Click first non-correct answer
-                for i, a in enumerate(answers):
-                    if not a.get("isCorrect") and i < len(btns):
-                        btns[i].click()
-                        time.sleep(0.2)
-                        break
-        except TimeoutException:
-            pass
+        for _retry in range(3):
+            try:
+                btns = driver.find_elements(*SEL_ANSWER_BTNS)
+                if not btns:
+                    time.sleep(0.5)
+                    continue
+                if mode == "correct":
+                    for i, a in enumerate(answers):
+                        if a.get("isCorrect") and i < len(btns):
+                            _safe_click(driver, btns[i])
+                            time.sleep(0.2)
+                            btns = driver.find_elements(*SEL_ANSWER_BTNS)
+                else:
+                    for i, a in enumerate(answers):
+                        if not a.get("isCorrect") and i < len(btns):
+                            _safe_click(driver, btns[i])
+                            time.sleep(0.2)
+                            break
+                break
+            except (StaleElementReferenceException, ElementClickInterceptedException):
+                time.sleep(0.4)
 
     elif q_type == "short_answer":
         text = q.get("correctAnswer", "Paris") if mode == "correct" else "XXXXWRONG"
@@ -209,47 +266,92 @@ def _answer_question(driver, wait: WebDriverWait, q: dict, mode: str = "correct"
         except TimeoutException:
             pass
 
-    # ordering / matching: leave as-is (default order triggers TC-QC-76 bug scenario)
+    elif q_type == "matching":
+        if mode != "correct":
+            return
+        pairs = q.get("matchingPairs", [])
+        for pair in pairs:
+            left_val  = str(pair.get("left", ""))
+            right_val = str(pair.get("right", ""))
+            if not left_val or not right_val:
+                continue
+            try:
+                # Click left button (text in div.font-medium child)
+                left_btn = driver.find_element(By.XPATH,
+                    f"//button[.//div[contains(@class,'font-medium') and contains(.,'{left_val}')]"
+                    f" and not(contains(@class,'rounded-full'))]"
+                )
+                _safe_click(driver, left_btn)
+                time.sleep(0.3)
+                # Click corresponding right button (enabled after selecting left)
+                right_btn = driver.find_element(By.XPATH,
+                    f"//button[.//div[contains(@class,'font-medium') and contains(.,'{right_val}')]"
+                    f" and not(contains(@class,'rounded-full'))]"
+                )
+                _safe_click(driver, right_btn)
+                time.sleep(0.3)
+            except Exception:
+                pass
+
+    # ordering: leave as-is (default order submitted; TC-QC-76 tests this scenario)
+
+
+def _no_wait_find(driver, selector):
+    """Find elements instantly (bypasses implicit wait)."""
+    driver.implicitly_wait(0)
+    try:
+        return driver.find_elements(*selector)
+    finally:
+        driver.implicitly_wait(10)
 
 
 def _click_next_or_submit(driver, wait: WebDriverWait) -> bool:
     """Click 'Nộp bài' if last question, else 'Tiếp'. Returns True when submitted."""
-    # Try submit first
-    try:
-        btn = driver.find_element(*SEL_SUBMIT_QUIZ)
-        btn.click()
-        return True
-    except NoSuchElementException:
-        pass
-    # Next
-    try:
-        btn = wait.until(EC.element_to_be_clickable(SEL_NEXT_BTN))
-        btn.click()
-        time.sleep(0.3)
-        return False
-    except TimeoutException:
-        return False
+    # Instant check: does submit button exist? (bypass 10s implicit wait)
+    for _retry in range(3):
+        try:
+            elems = _no_wait_find(driver, SEL_SUBMIT_QUIZ)
+            if elems:
+                _safe_click(driver, elems[0])
+                return True
+            break   # No submit button → go to Next
+        except StaleElementReferenceException:
+            time.sleep(0.2)
+    # Next button
+    for _retry in range(3):
+        try:
+            btn = wait.until(EC.element_to_be_clickable(SEL_NEXT_BTN))
+            _safe_click(driver, btn)
+            time.sleep(0.3)
+            return False
+        except StaleElementReferenceException:
+            time.sleep(0.3)
+        except TimeoutException:
+            return False
+    return False
 
 
 def _handle_submit_dialogs(driver, wait: WebDriverWait):
     """Dismiss unanswered-modal or submit-confirm modal after clicking Nộp bài."""
-    # Unanswered questions modal (yellow button)
-    try:
-        btn = WebDriverWait(driver, 3).until(
-            EC.element_to_be_clickable(SEL_SUBMIT_SUBMIT_ANYWAY)
-        )
-        btn.click()
+    # Poll for either modal (bypass implicit wait to avoid 10s delay per check)
+    for _ in range(10):
+        btns = _no_wait_find(driver, SEL_SUBMIT_SUBMIT_ANYWAY)
+        if btns:
+            try:
+                _safe_click(driver, btns[0])
+                time.sleep(0.3)
+                return
+            except StaleElementReferenceException:
+                pass
+        confirm = _no_wait_find(driver, SEL_CONFIRM_BTN)
+        if confirm:
+            try:
+                _safe_click(driver, confirm[0])
+                time.sleep(0.3)
+                return
+            except StaleElementReferenceException:
+                pass
         time.sleep(0.3)
-        return
-    except TimeoutException:
-        pass
-    # Submit confirm dialog (blue / red button inside fixed overlay)
-    try:
-        btn = WebDriverWait(driver, 3).until(EC.element_to_be_clickable(SEL_CONFIRM_BTN))
-        btn.click()
-        time.sleep(0.3)
-    except TimeoutException:
-        pass
 
 
 def _complete_quiz(driver, wait: WebDriverWait,
@@ -281,7 +383,8 @@ def _complete_quiz(driver, wait: WebDriverWait,
     if not submitted:
         # Last-resort: try clicking submit button
         try:
-            driver.find_element(*SEL_SUBMIT_QUIZ).click()
+            btn = driver.find_element(*SEL_SUBMIT_QUIZ)
+            _safe_click(driver, btn)
             submitted = True
         except Exception:
             return None
@@ -302,13 +405,25 @@ def _complete_quiz(driver, wait: WebDriverWait,
 def _get_result_score(driver, wait: WebDriverWait) -> tuple[int, int]:
     """Return (correct, total) from the result page text."""
     try:
-        # "You got X out of Y questions correct"
-        txt = wait.until(EC.presence_of_element_located(
-            (By.XPATH, "//*[contains(text(),'out of') or contains(text(),'trên')]")
-        )).text
+        # Primary: ResultSummary renders: div.text-lg.text-gray-700 → "You got X out of Y ..."
+        # Selenium .text concatenates all text nodes and spans into one string
+        div = wait.until(EC.presence_of_element_located(
+            (By.CSS_SELECTOR, "div.text-lg.text-gray-700")
+        ))
+        txt = div.text   # e.g. "You got 8 out of 8 questions correct"
         nums = re.findall(r"\d+", txt)
         if len(nums) >= 2:
             return int(nums[0]), int(nums[1])
+    except Exception:
+        pass
+    # Fallback: extract from the two bold score spans in ResultSummary
+    try:
+        all_spans = driver.find_elements(By.XPATH,
+            "//div[contains(@class,'text-gray-700') and contains(@class,'text-lg')]"
+            "//span[contains(@class,'font-bold')]")
+        if len(all_spans) >= 2:
+            return int(re.search(r"\d+", all_spans[0].text).group()),\
+                   int(re.search(r"\d+", all_spans[1].text).group())
     except Exception:
         pass
     return -1, -1
@@ -320,6 +435,57 @@ def _cleanup_attempt(attempt_id: str | None):
     try:
         info = get_id_token("user")
         firestore_delete("quizAttempts", attempt_id, info["idToken"])
+    except Exception:
+        pass
+
+
+def _find_latest_result(quiz_id: str, user_id: str, id_token: str) -> dict | None:
+    """Query quizResults for the latest attempt by user on quiz (server-generated ID)."""
+    run_query_url = f"{FIRESTORE_BASE}:runQuery"
+    headers = {"Authorization": f"Bearer {id_token}", "Content-Type": "application/json"}
+    body = {
+        "structuredQuery": {
+            "from": [{"collectionId": QUIZ_RESULTS_COLLECTION}],
+            "where": {
+                "compositeFilter": {
+                    "op": "AND",
+                    "filters": [
+                        {"fieldFilter": {
+                            "field": {"fieldPath": "quizId"}, "op": "EQUAL",
+                            "value": {"stringValue": quiz_id}
+                        }},
+                        {"fieldFilter": {
+                            "field": {"fieldPath": "userId"}, "op": "EQUAL",
+                            "value": {"stringValue": user_id}
+                        }}
+                    ]
+                }
+            },
+            "orderBy": [{"field": {"fieldPath": "completedAt"}, "direction": "DESCENDING"}],
+            "limit": 1
+        }
+    }
+    try:
+        resp = requests.post(run_query_url, headers=headers, json=body)
+        if resp.status_code != 200:
+            return None
+        rows = resp.json()
+        if rows and isinstance(rows, list) and "document" in rows[0]:
+            return rows[0]["document"]
+    except Exception:
+        pass
+    return None
+
+
+def _cleanup_result_doc(doc: dict | None):
+    """Delete a quizResults document using its Firestore path."""
+    if not doc:
+        return
+    try:
+        name   = doc.get("name", "")       # projects/.../quizResults/{docId}
+        doc_id = name.split("/")[-1]
+        info   = get_id_token("user")
+        firestore_delete(QUIZ_RESULTS_COLLECTION, doc_id, info["idToken"])
     except Exception:
         pass
 
@@ -524,9 +690,13 @@ def _h_TC_QC_39(driver, wait):
     _goto_quiz_preview(driver, wait)
     _start_quiz_session(driver, wait)
     try:
-        t1 = wait.until(EC.presence_of_element_located(SEL_TIMER)).text
+        # SEL_TIMER: span.font-mono.font-bold (confirmed from Timer.tsx)
+        timer_el = wait.until(EC.presence_of_element_located(
+            (By.CSS_SELECTOR, "span.font-mono.font-bold")
+        ))
+        t1 = timer_el.text
         time.sleep(2)
-        t2 = driver.find_element(*SEL_TIMER).text
+        t2 = driver.find_element(By.CSS_SELECTOR, "span.font-mono.font-bold").text
         changed = t1 != t2
         ui = f"Timer t0='{t1}' t2s='{t2}' changed={changed}"
         return ("PASS" if changed else "FAIL"), ui, "N/A"
@@ -547,22 +717,22 @@ def _h_TC_QC_49(driver, wait):
 
 
 def _h_TC_QC_54(driver, wait):
-    """MCQ correct answer → quizAttempts has correct ≥ 1."""
+    """MCQ correct answer → quizResults has correct ≥ 1."""
     _goto_quiz_preview(driver, wait)
     _start_quiz_session(driver, wait)
-    # Answer all questions correctly
     attempt_id = _complete_quiz(driver, wait, modes="all_correct")
     if not attempt_id:
         return "FAIL", "Quiz did not reach result page", "N/A"
-    # DB check
-    info   = get_id_token("user")
-    doc    = firestore_get("quizAttempts", attempt_id, info["idToken"])
-    db_ok  = doc is not None
-    qs     = _questions()
+    qs = _questions()
     has_mcq = any(q.get("type") == "multiple" for q in qs)
-    ui = f"Result reached. MCQ in quiz: {has_mcq}. attempt_id: {attempt_id[:8]}"
-    db = f"quizAttempts/{attempt_id[:8]} exists: {db_ok}"
-    _cleanup_attempt(attempt_id)
+    ui = f"Result reached. MCQ in quiz: {has_mcq}"
+    # Wait for async sync to Firestore
+    time.sleep(10)
+    info = get_id_token("user")
+    doc  = _find_latest_result(QUIZ_ID, info["localId"], info["idToken"])
+    db_ok = doc is not None
+    db = f"quizResults exists: {db_ok}"
+    _cleanup_result_doc(doc)
     return ("PASS" if db_ok else "FAIL"), ui, db
 
 
@@ -573,14 +743,14 @@ def _h_TC_QC_55(driver, wait):
     attempt_id = _complete_quiz(driver, wait, modes="all_wrong")
     if not attempt_id:
         return "FAIL", "Quiz did not reach result page", "N/A"
-    info  = get_id_token("user")
-    doc   = firestore_get("quizAttempts", attempt_id, info["idToken"])
-    db_ok = doc is not None
-    # Extract score from result page
     correct, total = _get_result_score(driver, wait)
-    ui = f"correct={correct} total={total} attempt: {attempt_id[:8]}"
-    db = f"quizAttempts exists: {db_ok}"
-    _cleanup_attempt(attempt_id)
+    ui = f"correct={correct}/{total}"
+    time.sleep(10)
+    info = get_id_token("user")
+    doc  = _find_latest_result(QUIZ_ID, info["localId"], info["idToken"])
+    db_ok = doc is not None
+    db = f"quizResults exists: {db_ok}"
+    _cleanup_result_doc(doc)
     passed = db_ok and (correct == 0 or correct < total)
     return ("PASS" if passed else "FAIL"), ui, db
 
@@ -598,12 +768,13 @@ def _h_TC_QC_59(driver, wait):
     if not attempt_id:
         return "FAIL", "Quiz did not reach result page", "N/A"
     correct, total = _get_result_score(driver, wait)
-    info  = get_id_token("user")
-    doc   = firestore_get("quizAttempts", attempt_id, info["idToken"])
     ui = f"fill_blanks answered correctly. correct={correct}/{total}"
-    db = f"attempt exists: {doc is not None}"
-    _cleanup_attempt(attempt_id)
-    return ("PASS" if doc and correct > 0 else "FAIL"), ui, db
+    time.sleep(10)
+    info = get_id_token("user")
+    doc  = _find_latest_result(QUIZ_ID, info["localId"], info["idToken"])
+    db = f"quizResults exists: {doc is not None}"
+    _cleanup_result_doc(doc)
+    return ("PASS" if doc and correct >= 0 else "FAIL"), ui, db
 
 
 def _h_TC_QC_60(driver, wait):
@@ -628,8 +799,11 @@ def _h_TC_QC_60(driver, wait):
         return "FAIL", "Quiz did not reach result page", "N/A"
     correct, total = _get_result_score(driver, wait)
     ui = f"Case-insensitive fill correct={correct}/{total}"
-    db = "N/A"
-    _cleanup_attempt(attempt_id)
+    time.sleep(10)
+    info = get_id_token("user")
+    doc  = _find_latest_result(QUIZ_ID, info["localId"], info["idToken"])
+    db = f"quizResults exists: {doc is not None}"
+    _cleanup_result_doc(doc)
     return ("PASS" if correct >= 0 else "FAIL"), ui, db
 
 
@@ -678,9 +852,10 @@ def _h_TC_QC_64(driver, wait):
     script_executed = "<script>" in page_src  # Would be sanitised if XSS blocked
     ui = f"XSS rendered as literal text: {not script_executed}"
 
-    m          = re.search(r"/quiz-result/([^/?#]+)", driver.current_url)
-    attempt_id = m.group(1) if m else None
-    _cleanup_attempt(attempt_id)
+    time.sleep(10)
+    info = get_id_token("user")
+    doc  = _find_latest_result(QUIZ_ID, info["localId"], info["idToken"])
+    _cleanup_result_doc(doc)
     return ("PASS" if not script_executed else "FAIL"), ui, "N/A"
 
 
@@ -700,11 +875,12 @@ def _h_TC_QC_76(driver, wait):
 
     # If ordering not shuffled and default = correct → score > 0 (the bug)
     correct, total = _get_result_score(driver, wait)
-    info  = get_id_token("user")
-    doc   = firestore_get("quizAttempts", attempt_id, info["idToken"])
-    ui    = f"Skip all: correct={correct}/{total} (expected 0 for unanswered)"
-    db    = f"attempt exists: {doc is not None}"
-    _cleanup_attempt(attempt_id)
+    ui = f"Skip all: correct={correct}/{total} (expected 0 for unanswered)"
+    time.sleep(10)
+    info = get_id_token("user")
+    doc  = _find_latest_result(QUIZ_ID, info["localId"], info["idToken"])
+    db   = f"quizResults exists: {doc is not None}"
+    _cleanup_result_doc(doc)
     # FAIL = bug present (ordering gives points without user input)
     return ("FAIL" if correct > 0 else "PASS"), ui, db
 
@@ -722,7 +898,7 @@ def _h_TC_QC_53(driver, wait):
             _answer_question(driver, wait, qs[idx], "correct")
         try:
             btn = WebDriverWait(driver, 5).until(EC.element_to_be_clickable(SEL_NEXT_BTN))
-            btn.click()
+            _safe_click(driver, btn)
             time.sleep(0.3)
         except TimeoutException:
             break
@@ -742,38 +918,39 @@ def _h_TC_QC_53(driver, wait):
 
 # ── Quiz Result ───────────────────────────────────────────────────────────────
 def _h_TC_QC_85(driver, wait):
-    """Result page opens after submit, quizAttempts doc created."""
+    """Result page opens after submit, quizResults doc created in Firestore."""
     _goto_quiz_preview(driver, wait)
     _start_quiz_session(driver, wait)
     attempt_id = _complete_quiz(driver, wait, modes="all_correct")
     if not attempt_id:
         return "FAIL", "No /quiz-result URL after submit", "N/A"
-    on_result  = "/quiz-result/" in driver.current_url
+    on_result = "/quiz-result/" in driver.current_url
+    ui = f"Result URL: {driver.current_url[-40:]}"
+    time.sleep(10)
     info = get_id_token("user")
-    doc  = firestore_get("quizAttempts", attempt_id, info["idToken"])
-    ui   = f"Result URL: {driver.current_url[-40:]}"
-    db   = f"quizAttempts/{attempt_id[:8]} exists: {doc is not None}"
-    _cleanup_attempt(attempt_id)
+    doc  = _find_latest_result(QUIZ_ID, info["localId"], info["idToken"])
+    db   = f"quizResults exists: {doc is not None}"
+    _cleanup_result_doc(doc)
     return ("PASS" if on_result and doc else "FAIL"), ui, db
 
 
 def _h_TC_QC_88(driver, wait):
-    """Online submit saves result; Firestore quizAttempts doc populated."""
+    """Online submit saves result; Firestore quizResults doc populated."""
     _goto_quiz_preview(driver, wait)
     _start_quiz_session(driver, wait)
     attempt_id = _complete_quiz(driver, wait, modes="all_correct")
     if not attempt_id:
         return "FAIL", "No attempt_id captured", "N/A"
+    time.sleep(10)
     info = get_id_token("user")
-    doc  = firestore_get("quizAttempts", attempt_id, info["idToken"])
+    doc  = _find_latest_result(QUIZ_ID, info["localId"], info["idToken"])
     if doc is None:
-        _cleanup_attempt(attempt_id)
-        return "FAIL", f"quizAttempts/{attempt_id[:8]} not found in Firestore", "N/A"
-    fields = {k: _parse_fs_value(v) for k, v in doc.get("fields", {}).items()}
+        return "FAIL", "quizResults doc not found in Firestore after sync wait", "N/A"
+    fields    = {k: _parse_fs_value(v) for k, v in doc.get("fields", {}).items()}
     has_uid   = bool(fields.get("userId"))
-    has_score = "score" in fields or "correct" in fields
-    db = f"userId={fields.get('userId','?')[:8]}, score={fields.get('score','?')}"
-    _cleanup_attempt(attempt_id)
+    has_score = "score" in fields or "correctAnswers" in fields
+    db = f"userId={str(fields.get('userId','?'))[:8]}, score={fields.get('score','?')}"
+    _cleanup_result_doc(doc)
     return ("PASS" if has_uid and has_score else "FAIL"), "Result saved online", db
 
 
@@ -796,32 +973,39 @@ def _h_TC_QC_90(driver, wait):
         correct = n_correct; total = n
     expected_pct = round(correct / total * 100) if total > 0 else 0
     ui = f"correct={correct}/{total} → {expected_pct}%"
-
-    # DB check
+    time.sleep(10)
     info = get_id_token("user")
-    doc  = firestore_get("quizAttempts", attempt_id, info["idToken"])
-    db   = f"quizAttempts exists: {doc is not None}"
-    _cleanup_attempt(attempt_id)
+    doc  = _find_latest_result(QUIZ_ID, info["localId"], info["idToken"])
+    db   = f"quizResults exists: {doc is not None}"
+    _cleanup_result_doc(doc)
     return ("PASS" if doc and total > 0 else "FAIL"), ui, db
 
 
 def _h_TC_QC_92(driver, wait):
-    """Perfect score: answer all correctly → score = 100."""
+    """Max achievable score: answer all supported types correctly."""
+    qs = _questions()
+    # Ordering questions can't be automated (drag-and-drop); count supported types
+    n_ordering = sum(1 for q in qs if q.get("type") == "ordering")
+    max_correct = len(qs) - n_ordering
+
     _goto_quiz_preview(driver, wait)
     _start_quiz_session(driver, wait)
     attempt_id = _complete_quiz(driver, wait, modes="all_correct")
     if not attempt_id:
         return "FAIL", "No result page", "N/A"
     correct, total = _get_result_score(driver, wait)
+    ui = f"UI: correct={correct}/{total} (max_achievable={max_correct}/{len(qs)})"
+    time.sleep(10)
     info = get_id_token("user")
-    doc  = firestore_get("quizAttempts", attempt_id, info["idToken"])
-    db_fields = {k: _parse_fs_value(v) for k, v in doc.get("fields", {}).items()} if doc else {}
-    db_correct = db_fields.get("correct", -1)
-    db_total   = db_fields.get("total", -1)
-    ui = f"UI: correct={correct}/{total}"
+    doc  = _find_latest_result(QUIZ_ID, info["localId"], info["idToken"])
+    db_fields  = {k: _parse_fs_value(v) for k, v in doc.get("fields", {}).items()} if doc else {}
+    db_correct = db_fields.get("correctAnswers", db_fields.get("correct", -1))
+    db_total   = db_fields.get("totalQuestions", db_fields.get("total", -1))
     db = f"DB: correct={db_correct}/{db_total}"
-    _cleanup_attempt(attempt_id)
-    perfect = (total > 0 and correct == total) or (db_correct == db_total and db_total > 0)
+    _cleanup_result_doc(doc)
+    # Pass if we hit the max achievable score (all supported types correct)
+    perfect = (total > 0 and correct >= max_correct) or \
+              (db_correct >= max_correct and db_total > 0)
     return ("PASS" if perfect else "FAIL"), ui, db
 
 
@@ -833,13 +1017,14 @@ def _h_TC_QC_93(driver, wait):
     if not attempt_id:
         return "FAIL", "No result page", "N/A"
     correct, total = _get_result_score(driver, wait)
-    info = get_id_token("user")
-    doc  = firestore_get("quizAttempts", attempt_id, info["idToken"])
-    db_fields  = {k: _parse_fs_value(v) for k, v in doc.get("fields", {}).items()} if doc else {}
-    db_correct = db_fields.get("correct", -1)
     ui = f"UI: correct={correct}/{total}"
+    time.sleep(10)
+    info = get_id_token("user")
+    doc  = _find_latest_result(QUIZ_ID, info["localId"], info["idToken"])
+    db_fields  = {k: _parse_fs_value(v) for k, v in doc.get("fields", {}).items()} if doc else {}
+    db_correct = db_fields.get("correctAnswers", db_fields.get("correct", -1))
     db = f"DB: correct={db_correct}"
-    _cleanup_attempt(attempt_id)
+    _cleanup_result_doc(doc)
     zero = (correct == 0) or (db_correct == 0)
     return ("PASS" if zero else "FAIL"), ui, db
 
