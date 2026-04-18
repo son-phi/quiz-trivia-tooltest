@@ -42,16 +42,8 @@ def driver():
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--window-size=1920,1080")
     opts.add_argument("--disable-notifications")
-    # webdriver_manager 4.x bug: install() may return THIRD_PARTY_NOTICES instead
-    # of chromedriver.exe. Resolve the real executable from the same directory.
-    raw_path = ChromeDriverManager().install()
-    driver_path = Path(raw_path)
-    if driver_path.suffix != ".exe" and not driver_path.name.startswith("chromedriver"):
-        candidate = driver_path.parent / "chromedriver.exe"
-        if candidate.exists():
-            raw_path = str(candidate)
-    service = Service(raw_path)
-    drv = webdriver.Chrome(service=service, options=opts)
+    # Selenium 4.6+ tự động quản lý driver, giải quyết lỗi WinError 193 của thư viện bên ngoài
+    drv = webdriver.Chrome(options=opts)
     drv.implicitly_wait(10)
     yield drv
     drv.quit()
@@ -144,10 +136,14 @@ class ExcelResultWriter:
                     print(f"  [WARN] Cannot write to Excel (file open?): {self.path} — test result: {status}")
 
 
+# Lấy thư mục gốc (2 level trên của conftest.py) để trỏ đúng thư mục data/
+import os
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
 @pytest.fixture(scope="session")
 def excel_login():
     return ExcelResultWriter(
-        xlsx_path="../../data/TC_Login.xlsx",
+        xlsx_path=os.path.join(BASE_DIR, "data", "TC_Login.xlsx"),
         sheet_name="TC_Login",
         status_col=12, actual_ui_col=10, actual_db_col=11, data_start_row=8,
     )
@@ -156,7 +152,7 @@ def excel_login():
 @pytest.fixture(scope="session")
 def excel_quiz_core():
     return ExcelResultWriter(
-        xlsx_path="../../data/TC_QuizCoreFlow.xlsx",
+        xlsx_path=os.path.join(BASE_DIR, "data", "TC_QuizCoreFlow.xlsx"),
         sheet_name="TC_QuizCoreFlow",
         status_col=11, actual_ui_col=9, actual_db_col=10, data_start_row=8,
     )
@@ -165,7 +161,7 @@ def excel_quiz_core():
 @pytest.fixture(scope="session")
 def excel_quiz_mgmt():
     return ExcelResultWriter(
-        xlsx_path="../../data/TC_QuizManagement.xlsx",
+        xlsx_path=os.path.join(BASE_DIR, "data", "TC_QuizManagement.xlsx"),
         sheet_name="TC_QuizCRUD",
         status_col=11, actual_ui_col=9, actual_db_col=10, data_start_row=6,
     )
@@ -174,7 +170,7 @@ def excel_quiz_mgmt():
 @pytest.fixture(scope="session")
 def excel_ai():
     return ExcelResultWriter(
-        xlsx_path="../../data/TC_AIFeatures.xlsx",
+        xlsx_path=os.path.join(BASE_DIR, "data", "TC_AIFeatures.xlsx"),
         sheet_name="TC_AIGenerator",
         status_col=11, actual_ui_col=8, actual_db_col=9, data_start_row=6,
     )
