@@ -131,7 +131,17 @@ class ExcelResultWriter:
         existing = self.ws.cell(row, note_col).value or ""
         self.ws.cell(row, note_col,
                      f"{existing} | Run: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        self.wb.save(self.path)
+        # Retry save up to 3 times – file may be locked by Excel
+        for attempt in range(3):
+            try:
+                self.wb.save(self.path)
+                return
+            except PermissionError:
+                if attempt < 2:
+                    print(f"  [WARN] Excel file locked, retrying in 2s… ({attempt+1}/3)")
+                    import time as _t; _t.sleep(2)
+                else:
+                    print(f"  [WARN] Cannot write to Excel (file open?): {self.path} — test result: {status}")
 
 
 @pytest.fixture(scope="session")

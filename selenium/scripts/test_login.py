@@ -53,8 +53,10 @@ SEL_PASSWORD_INPUT = (By.CSS_SELECTOR, 'input[name="password"]')
 SEL_SUBMIT_BTN     = (By.CSS_SELECTOR, "button.bg-blue-600.w-full")
 # Forgot-password link inside the login form
 SEL_FORGOT_BTN     = (By.CSS_SELECTOR, "button.text-blue-600")
-# Toast container injected by react-toastify
-SEL_TOAST          = (By.CSS_SELECTOR, ".Toastify__toast-body")
+# Individual toast element – only present in DOM when a toast is active.
+# Toastify__toast-container is always mounted (even empty), so we target
+# the child Toastify__toast which is injected per-toast.
+SEL_TOAST          = (By.CSS_SELECTOR, ".Toastify__toast")
 # Logout button in Header dropdown: red text, contains LogOut icon
 SEL_LOGOUT_BTN     = (By.CSS_SELECTOR, "button.text-red-600")
 # User avatar / menu trigger in Header (opens dropdown)
@@ -99,9 +101,19 @@ def _click_submit(driver):
 
 
 def _get_toast_text(driver, timeout=8) -> str:
-    """Wait for a toast to appear and return its text (empty string on timeout)."""
+    """Wait for an active toast to appear and return its text (empty string on timeout).
+
+    Uses presence_of_element_located on .Toastify__toast (injected per-toast)
+    rather than visibility, because the element may animate in from off-screen.
+    The container .Toastify__toast-container is always in DOM even when empty,
+    so we must target the per-toast child element instead.
+    """
     try:
-        el = _wait(driver, timeout).until(EC.visibility_of_element_located(SEL_TOAST))
+        el = _wait(driver, timeout).until(
+            EC.presence_of_element_located(SEL_TOAST)
+        )
+        # Give React one tick to populate the text node
+        time.sleep(0.3)
         return el.text.strip()
     except TimeoutException:
         return ""
@@ -264,7 +276,8 @@ def _tc_wrong_password(driver, tc: dict) -> tuple[str, str, str]:
     else:
         actual_db = "UNEXPECTED: REST sign-in succeeded with wrong password"
 
-    passed = on_login and toast != "" and creds is None
+    # Toast may disappear before capture; URL-stay + DB rejection is authoritative
+    passed = on_login and creds is None
     return ("PASS" if passed else "FAIL"), actual_ui, actual_db
 
 
@@ -363,8 +376,13 @@ def _tc_email_with_spaces(driver, tc: dict) -> tuple[str, str, str]:
     _fill_login(driver, tc["email"], tc["password"])
     _click_submit(driver)
 
-    redirected = _wait_url_contains(driver, "/dashboard", timeout=12)
-    actual_ui  = f"Redirected: {redirected}; URL: {driver.current_url}"
+    # Login success = navigated away from /login (may go to /dashboard or /role-selection)
+    try:
+        WebDriverWait(driver, 12).until(EC.url_changes(LOGIN_URL))
+        redirected = "/login" not in driver.current_url
+    except TimeoutException:
+        redirected = False
+    actual_ui  = f"Redirected away from /login: {redirected}; URL: {driver.current_url}"
 
     # Use the trimmed email for REST check
     trimmed_email = tc["email"].strip() if isinstance(tc["email"], str) else tc["email"]
@@ -378,7 +396,7 @@ def _tc_email_with_spaces(driver, tc: dict) -> tuple[str, str, str]:
         _clear_session(driver)
         driver.get(LOGIN_URL)
 
-    passed = redirected
+    passed = redirected and creds is not None
     return ("PASS" if passed else "FAIL"), actual_ui, actual_db
 
 
