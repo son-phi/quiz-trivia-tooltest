@@ -474,11 +474,25 @@ def _fill_quiz_info(
 def _add_mcq_question(driver, wait: WebDriverWait, q_text: str = "What is 1+1?"):
     """Add one MCQ question in QuestionsStep.
     Source: QuestionsStep.tsx — Add button has bg-blue-600, question block has bg-gray-50."""
-    add_btn = wait.until(EC.element_to_be_clickable(
-        (By.XPATH,
-         "//button[contains(@class,'bg-blue-600') and "
-         "(contains(.,'Add') or contains(.,'Thêm') or contains(.,'câu hỏi'))]")
-    ))
+    # Wait for page to settle after navigating to questions step
+    _wait_for_page_stable(driver, extra_sleep=0.5)
+
+    # Try multiple XPaths — button class/text may vary by build
+    ADD_XPATHS = [
+        "//button[contains(@class,'bg-blue-600') and (contains(.,'Add') or contains(.,'Thêm') or contains(.,'câu hỏi'))]",
+        "//button[contains(.,'Add') or contains(.,'Thêm') or contains(.,'câu hỏi')]",
+        "//button[contains(@class,'blue') and not(contains(.,'→')) and not(contains(.,'←'))]",
+    ]
+    add_btn = None
+    for xp in ADD_XPATHS:
+        try:
+            add_btn = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, xp)))
+            break
+        except TimeoutException:
+            continue
+    if add_btn is None:
+        raise TimeoutException("Add Question button not found with any known XPath")
+
     _safe_click(driver, add_btn)
     time.sleep(0.8)
 
@@ -530,6 +544,14 @@ def _do_full_create_wizard(
     # Step 1: Quiz info
     _fill_quiz_info(driver, wait, title, duration=duration)
     _click_continue(driver, wait)
+    _wait_for_page_stable(driver, extra_sleep=0.5)
+    # If still on info step (click didn't advance), re-click once
+    on_questions = bool(driver.find_elements(
+        By.XPATH, "//button[contains(.,'Add') or contains(.,'Thêm') or contains(.,'câu hỏi')]"
+    ))
+    if not on_questions:
+        _click_continue(driver, wait)
+        _wait_for_page_stable(driver, extra_sleep=0.5)
 
     # Step 2: Questions
     _add_mcq_question(driver, wait)
