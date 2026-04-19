@@ -4,7 +4,8 @@
       "Bash(python -m pytest \"test_login.py::test_login[TC-RBAC-VAL-05]\" -v --tb=short)",
       "Bash(python -c ' *)",
       "Bash(xargs grep *)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(pytest selenium/scripts/test_quiz_management.py -v -s -k \"TC-CQ-002\")"
     ]
   }
 }
