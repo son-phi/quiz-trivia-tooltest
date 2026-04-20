@@ -16,7 +16,11 @@ from datetime import datetime
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.common.exceptions import (
+    TimeoutException, NoSuchElementException,
+    StaleElementReferenceException, ElementClickInterceptedException,
+)
 
 from conftest import (
     get_id_token,
@@ -101,7 +105,7 @@ SEL_CHAT_ERROR   = (By.CSS_SELECTOR, ".bg-red-50, .bg-red-900\\/20")
 @pytest.fixture(scope="session")
 def excel_chatbot():
     return ExcelResultWriter(
-        xlsx_path="../../data/TC_AIFeatures.xlsx",
+        xlsx_path=str(_DATA_FILE),
         sheet_name=_CB_SHEET,
         tc_col=1, status_col=10, actual_ui_col=9, actual_db_col=10,
         data_start_row=_CB_START,
@@ -112,6 +116,81 @@ def excel_chatbot():
 
 def _wait(driver, timeout=10):
     return WebDriverWait(driver, timeout)
+
+
+def _wait_for_page_stable(driver, timeout: int = 30, stable_for: float = 1.2, extra_sleep: float = 0.3):
+    """Wait until page is free of loading indicators for stable_for seconds."""
+    LOADING_XPATH = (
+        "//*["
+        "contains(text(),'Đang tải') or "
+        "contains(text(),'Vui lòng đợi') or "
+        "contains(text(),'Loading') or "
+        "contains(text(),'Đang kiểm tra') or "
+        "contains(text(),'xác thực')"
+        "]"
+    )
+    deadline = time.time() + timeout
+    stable_since = None
+    while time.time() < deadline:
+        try:
+            has_loading = bool(driver.find_elements(By.XPATH, LOADING_XPATH))
+        except StaleElementReferenceException:
+            has_loading = True
+        if has_loading:
+            stable_since = None
+        else:
+            if stable_since is None:
+                stable_since = time.time()
+            elif time.time() - stable_since >= stable_for:
+                break
+        time.sleep(0.25)
+    if extra_sleep > 0:
+        time.sleep(extra_sleep)
+
+
+def _invoke_react_onclick(driver, element) -> bool:
+    return driver.execute_script("""
+        var el = arguments[0];
+        var fiberKey = Object.keys(el).find(function(k) {
+            return k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance');
+        });
+        if (!fiberKey) return false;
+        var fiber = el[fiberKey];
+        var node = fiber;
+        for (var i = 0; i < 5; i++) {
+            if (!node) break;
+            var props = node.memoizedProps || node.pendingProps;
+            if (props && props.onClick) {
+                props.onClick({
+                    preventDefault: function(){},
+                    stopPropagation: function(){},
+                    target: el, currentTarget: el,
+                    type: 'click', nativeEvent: {}
+                });
+                return true;
+            }
+            node = node.return;
+        }
+        return false;
+    """, element)
+
+
+def _wait_for_btn_enabled(driver, xpath: str, timeout: int = 20):
+    """Wait for button to exist and not be disabled (opacity-50/cursor-not-allowed)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            btns = driver.find_elements(By.XPATH, xpath)
+            if btns:
+                btn = btns[0]
+                cls = btn.get_attribute("class") or ""
+                disabled_attr = btn.get_attribute("disabled")
+                if not disabled_attr and "opacity-50" not in cls and "cursor-not-allowed" not in cls and btn.is_displayed():
+                    return btn
+        except StaleElementReferenceException:
+            pass
+        time.sleep(0.3)
+    raise TimeoutException(f"Button ({xpath!r}) not enabled after {timeout}s")
 
 
 def _toast(driver, timeout=8) -> str:
@@ -180,57 +259,76 @@ def _navigate_to_questions_step(driver) -> bool:
     Returns True if the Questions step (with AI button) is reached.
     """
     driver.get(CREATOR_NEW_URL)
-    time.sleep(1.5)
+    _wait_for_page_stable(driver, extra_sleep=1.0)
 
-    # If redirected away (not creator role or not logged in), bail
     if "/creator/new" not in driver.current_url:
         return False
 
-    # ── Step 0: QuizTypeStep – select a type card ──────────────────────────
+    wait = WebDriverWait(driver, 15)
+
+    # ── Step 0: QuizTypeStep – select "standard" card (index 1) ──────────
+    CARD_XPATH = "//div[contains(@class,'grid')]//button[.//h3]"
     try:
-        # Find all clickable cards and pick "standard" (usually 2nd) or first
-        cards = _wait(driver, 8).until(
-            EC.presence_of_all_elements_located((By.CSS_SELECTOR,
-                "div[class*='cursor-pointer'], div[class*='rounded'][class*='border']"
-            ))
-        )
-        # Click the second card (index 1 = standard type) if available
-        target = cards[1] if len(cards) > 1 else cards[0]
-        driver.execute_script("arguments[0].click();", target)
-        time.sleep(0.5)
+        for attempt in range(3):
+            try:
+                btns = wait.until(EC.presence_of_all_elements_located((By.XPATH, CARD_XPATH)))
+                btn = btns[1] if len(btns) > 1 else btns[0]
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+                time.sleep(0.2)
+                called = _invoke_react_onclick(driver, btn)
+                if not called:
+                    ActionChains(driver).move_to_element(btn).click().perform()
+                time.sleep(0.6)
+                # Verify selection (selected card gets border-transparent)
+                btns_check = driver.find_elements(By.XPATH, CARD_XPATH)
+                idx = 1 if len(btns_check) > 1 else 0
+                if btns_check and "border-transparent" in (btns_check[idx].get_attribute("class") or ""):
+                    break
+            except (StaleElementReferenceException, ElementClickInterceptedException):
+                time.sleep(0.5)
     except (TimeoutException, IndexError):
         return False
 
     # Click Continue → QuizInfoStep
+    CONT_XPATH = "//button[contains(.,'→') and not(contains(.,'←'))]"
     try:
-        btn = _wait(driver, 5).until(EC.element_to_be_clickable(SEL_CONTINUE))
-        btn.click()
-        time.sleep(0.8)
+        _wait_for_btn_enabled(driver, CONT_XPATH, timeout=15)
+        btn = driver.find_elements(By.XPATH, CONT_XPATH)[0]
+        ActionChains(driver).move_to_element(btn).click().perform()
+        _wait_for_page_stable(driver, extra_sleep=0.8)
     except TimeoutException:
         return False
 
     # ── Step 1: QuizInfoStep – fill title ─────────────────────────────────
     try:
-        title_el = _wait(driver, 5).until(EC.presence_of_element_located(SEL_TITLE_INPUT))
+        title_el = wait.until(EC.element_to_be_clickable(
+            (By.CSS_SELECTOR, "input.w-full.p-4.border-2.border-gray-200.rounded-xl")
+        ))
         title_el.clear()
         title_el.send_keys(f"[AUTO TEST] {datetime.now().strftime('%H%M%S')}")
     except TimeoutException:
         return False
 
-    # Click Continue → QuestionsStep
-    try:
-        btn = _wait(driver, 5).until(EC.element_to_be_clickable(SEL_CONTINUE))
-        btn.click()
-        time.sleep(0.8)
-    except TimeoutException:
-        return False
+    # Click Continue → QuestionsStep (retry up to 3x)
+    for attempt in range(3):
+        try:
+            _wait_for_btn_enabled(driver, CONT_XPATH, timeout=15)
+            btn = driver.find_elements(By.XPATH, CONT_XPATH)[0]
+            ActionChains(driver).move_to_element(btn).click().perform()
+            _wait_for_page_stable(driver, extra_sleep=1.0)
+        except TimeoutException:
+            return False
 
-    # ── Verify AI button is visible (QuestionsStep) ────────────────────────
-    try:
-        _wait(driver, 5).until(EC.presence_of_element_located(SEL_AI_BTN))
-        return True
-    except TimeoutException:
-        return False
+        # Check if we reached Questions step
+        try:
+            WebDriverWait(driver, 8).until(EC.presence_of_element_located(SEL_AI_BTN))
+            return True
+        except TimeoutException:
+            if attempt < 2:
+                time.sleep(1.0)
+            continue
+
+    return False
 
 
 def _open_ai_modal(driver) -> bool:
