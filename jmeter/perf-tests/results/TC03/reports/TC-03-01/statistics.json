@@ -1,0 +1,34 @@
+{
+  "TC03-01 Ask RAG" : {
+    "transaction" : "TC03-01 Ask RAG",
+    "sampleCount" : 15,
+    "errorCount" : 1,
+    "errorPct" : 6.6666665,
+    "meanResTime" : 17028.266666666666,
+    "medianResTime" : 14040.0,
+    "minResTime" : 6154.0,
+    "maxResTime" : 29744.0,
+    "pct1ResTime" : 28881.8,
+    "pct2ResTime" : 29744.0,
+    "pct3ResTime" : 29744.0,
+    "throughput" : 0.1592086269848009,
+    "receivedKBytesPerSec" : 0.7666061231637938,
+    "sentKBytesPerSec" : 0.20199594548696614
+  },
+  "Total" : {
+    "transaction" : "Total",
+    "sampleCount" : 15,
+    "errorCount" : 1,
+    "errorPct" : 6.6666665,
+    "meanResTime" : 17028.266666666666,
+    "medianResTime" : 14040.0,
+    "minResTime" : 6154.0,
+    "maxResTime" : 29744.0,
+    "pct1ResTime" : 28881.8,
+    "pct2ResTime" : 29744.0,
+    "pct3ResTime" : 29744.0,
+    "throughput" : 0.1592086269848009,
+    "receivedKBytesPerSec" : 0.7666061231637938,
+    "sentKBytesPerSec" : 0.20199594548696614
+  }
+}

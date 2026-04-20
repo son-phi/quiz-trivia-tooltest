@@ -1,0 +1,975 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  quiz_performance_test.jmx
+  ==========================
+  JMeter Performance Test Plan — QuizzTrivia App (datn-quizapp)
+  Firebase project ID : datn-quizapp
+  Cloud Functions URL : https://us-central1-datn-quizapp.cloudfunctions.net
+  Firestore REST URL  : https://firestore.googleapis.com/v1/projects/datn-quizapp/databases/(default)/documents
+  RTDB URL            : https://datn-quizapp-default-rtdb.firebaseio.com
+
+  Cấu trúc file:
+    TC-01 Thread Group — Solo Quiz Flow       (disabled by default)
+    TC-02 Host Thread Group — Multiplayer     (disabled by default)
+    TC-02 Player Thread Group — Multiplayer   (disabled by default)
+    TC-03 Thread Group — Chatbot RAG Flow     (disabled by default)
+
+  Cách dùng:
+    1. Chạy refresh_tokens.py để có users.csv mới (token hết hạn sau 1 giờ)
+    2. Điền quizId thực vào data/quizzes.csv
+    3. Mở file trong JMeter GUI, enable Thread Group muốn chạy
+    4. Chỉnh ${__P(tc01_users,20)} qua command line: -Jtc01_users=100
+    5. Chạy: jmeter -n -t quiz_performance_test.jmx -l results.jtl -Jtc01_users=50
+
+  Load levels (truyền qua -J):
+    Baseline : tc01_users=20, tc01_rampup=30,  tc01_duration=300
+    Normal   : tc01_users=50, tc01_rampup=60,  tc01_duration=600
+    Stress   : tc01_users=100,tc01_rampup=90,  tc01_duration=600
+    Breaking : tc01_users=200,tc01_rampup=120, tc01_duration=300
+
+  Tương tự cho TC-02 (tc02_hosts, tc02_players) và TC-03 (tc03_users).
+-->
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         TEST PLAN ROOT
+         ═══════════════════════════════════════════════════════════ -->
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="QuizzTrivia Performance Test" enabled="true">
+      <stringProp name="TestPlan.comments">QuizzTrivia App — Firebase + Gemini AI performance test suite</stringProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+      <!-- Biến toàn cục dùng chung cho tất cả Thread Group -->
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments">
+        <collectionProp name="Arguments.arguments">
+          <!-- Base URLs -->
+          <elementProp name="FUNCTIONS_URL" elementType="Argument">
+            <stringProp name="Argument.name">FUNCTIONS_URL</stringProp>
+            <stringProp name="Argument.value">https://us-central1-datn-quizapp.cloudfunctions.net</stringProp>
+          </elementProp>
+          <elementProp name="FIRESTORE_URL" elementType="Argument">
+            <stringProp name="Argument.name">FIRESTORE_URL</stringProp>
+            <stringProp name="Argument.value">https://firestore.googleapis.com/v1/projects/datn-quizapp/databases/(default)/documents</stringProp>
+          </elementProp>
+          <elementProp name="RTDB_URL" elementType="Argument">
+            <stringProp name="Argument.name">RTDB_URL</stringProp>
+            <stringProp name="Argument.value">https://datn-quizapp-default-rtdb.firebaseio.com</stringProp>
+          </elementProp>
+        </collectionProp>
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+
+      <!-- ═══════════════════════════════════════════════════════
+           GLOBAL LISTENERS — thu thập kết quả từ tất cả TC
+           ═══════════════════════════════════════════════════════ -->
+
+      <!-- Summary Report: tổng hợp thống kê cuối cùng -->
+      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="Summary Report" enabled="true">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time><latency>true</latency><timestamp>true</timestamp>
+            <success>true</success><label>true</label><code>true</code>
+            <message>true</message><threadName>true</threadName><dataType>true</dataType>
+            <encoding>false</encoding><assertions>true</assertions><subresults>true</subresults>
+            <responseData>false</responseData><samplerData>false</samplerData>
+            <xml>false</xml><fieldNames>true</fieldNames><responseHeaders>false</responseHeaders>
+            <requestHeaders>false</requestHeaders><responseDataOnError>false</responseDataOnError>
+            <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+            <bytes>true</bytes><sentBytes>true</sentBytes><url>true</url>
+            <threadCounts>true</threadCounts><idleTime>true</idleTime><connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <!-- Tên file tự động theo TC và load level: results/{TC}/{level}.jtl -->
+        <!-- Truyền qua -Jtc=TC01 -Jlevel=baseline khi chạy command line -->
+        <stringProp name="filename">results/${__P(tc,TC01)}/${__P(level,baseline)}.jtl</stringProp>
+      </ResultCollector>
+      <hashTree/>
+
+      <!-- Response Time Graph: biểu đồ thời gian phản hồi theo thời gian -->
+      <ResultCollector guiclass="RespTimeGraphVisualizer" testclass="ResultCollector" testname="Response Time Graph" enabled="true">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time><latency>true</latency><timestamp>true</timestamp>
+            <success>true</success><label>true</label><code>true</code>
+          </value>
+        </objProp>
+        <stringProp name="filename">results/${__P(tc,TC01)}/response_time_${__P(level,baseline)}.jtl</stringProp>
+      </ResultCollector>
+      <hashTree/>
+
+      <!-- Active Threads Over Time: xem bao nhiêu user đang chạy tại mỗi thời điểm -->
+      <ResultCollector guiclass="ActiveThreadsOverTime" testclass="ResultCollector" testname="Active Threads Over Time" enabled="true">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time><timestamp>true</timestamp><success>true</success><label>true</label>
+          </value>
+        </objProp>
+        <stringProp name="filename">results/${__P(tc,TC01)}/active_threads_${__P(level,baseline)}.jtl</stringProp>
+      </ResultCollector>
+      <hashTree/>
+
+
+      <!-- ═══════════════════════════════════════════════════════════════
+           TC-01: SOLO QUIZ FLOW
+           Flow: GET quiz info → GET questions → loop answers → POST result
+           Tất cả calls dùng Firestore REST API với Bearer token từ users.csv
+           ═══════════════════════════════════════════════════════════════ -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="TC-01 Solo Quiz Flow" enabled="false">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <!-- Số user: truyền qua -Jtc01_users=N, mặc định 20 (Baseline) -->
+        <stringProp name="ThreadGroup.num_threads">${__P(tc01_users,20)}</stringProp>
+        <!-- Ramp-up (giây): thời gian để tất cả user khởi động -->
+        <stringProp name="ThreadGroup.ramp_time">${__P(tc01_rampup,30)}</stringProp>
+        <!-- Scheduler: chạy trong khoảng thời gian cố định thay vì số lần lặp -->
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">${__P(tc01_duration,300)}</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+
+        <!-- CSV Data Set: load user token cho TC-01 -->
+        <!-- Sharing Mode = All Threads: tất cả thread dùng chung một con trỏ CSV -->
+        <!-- Stop on EOF = false: vòng lặp lại từ đầu khi hết file -->
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="CSV Users" enabled="true">
+          <stringProp name="filename">data/users.csv</stringProp>
+          <stringProp name="variableNames">uid,email,idToken</stringProp>
+          <stringProp name="delimiter">,</stringProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
+          <stringProp name="shareMode">shareMode.all</stringProp>
+          <boolProp name="ignoreFirstLine">true</boolProp>
+        </CSVDataSet>
+        <hashTree/>
+
+        <!-- CSV Data Set: load quizId và questionCount -->
+        <!-- Mỗi vòng lặp của thread sẽ lấy một quiz khác nhau từ file -->
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="CSV Quizzes" enabled="true">
+          <stringProp name="filename">data/quizzes.csv</stringProp>
+          <stringProp name="variableNames">quizId,questionCount</stringProp>
+          <stringProp name="delimiter">,</stringProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
+          <stringProp name="shareMode">shareMode.all</stringProp>
+          <boolProp name="ignoreFirstLine">true</boolProp>
+        </CSVDataSet>
+        <hashTree/>
+
+        <!-- HTTP Header Manager: thêm Authorization Bearer token vào mọi request -->
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Auth Header" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Authorization</stringProp>
+              <!-- ${idToken} được đọc từ CSV users.csv ở trên -->
+              <stringProp name="Header.value">Bearer ${idToken}</stringProp>
+            </elementProp>
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <!-- ── STEP 1: GET Quiz Info ──────────────────────────────────
+             Firestore REST: GET /quizzes/{quizId}
+             Trả về metadata của quiz (title, category, difficulty, v.v.)
+             quizId đọc từ quizzes.csv
+             ──────────────────────────────────────────────────────────── -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="TC01-01 GET Quiz Info" enabled="true">
+          <stringProp name="HTTPSampler.domain">firestore.googleapis.com</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/v1/projects/datn-quizapp/databases/(default)/documents/quizzes/${quizId}</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <!-- Assertion: phải trả về 2xx, nếu không tính là lỗi -->
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert 2xx" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49587">2</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">TC01-01: GET Quiz Info không trả về 2xx</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">2</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+
+        <!-- ── STEP 2: GET Questions ──────────────────────────────────
+             Firestore REST: GET /quizzes/{quizId}/questions
+             Lấy danh sách câu hỏi của quiz (subcollection)
+             questionCount đọc từ CSV để biết vòng lặp phải đi bao nhiêu vòng
+             ──────────────────────────────────────────────────────────── -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="TC01-02 GET Questions" enabled="true">
+          <stringProp name="HTTPSampler.domain">firestore.googleapis.com</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/v1/projects/datn-quizapp/databases/(default)/documents/quizzes/${quizId}/questions</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert 2xx" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49587">2</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">TC01-02: GET Questions không trả về 2xx</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">2</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+
+        <!-- ── STEP 3: Answer Loop ────────────────────────────────────
+             Lặp questionCount lần — mô phỏng người dùng đọc + trả lời từng câu
+             Solo quiz không có server-side answer validation (validate client-side)
+             Nên step này chỉ là think time (Gaussian timer) + log để đo thời gian
+             Nếu app có POST answer endpoint, thêm HTTPSamplerProxy vào đây
+             ──────────────────────────────────────────────────────────── -->
+        <LoopController guiclass="LoopControlPanel" testclass="LoopController" testname="Answer Loop (x questionCount)" enabled="true">
+          <!-- questionCount đọc từ CSV — mỗi câu hỏi trong quiz -->
+          <stringProp name="LoopController.loops">${questionCount}</stringProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </LoopController>
+        <hashTree>
+          <!-- Think time: Gaussian 500ms ± 200ms — giữ ngắn để POST Result kịp chạy trong duration -->
+          <GaussianRandomTimer guiclass="GaussianRandomTimerGui" testclass="GaussianRandomTimer" testname="Think Time 500ms±200ms" enabled="true">
+            <stringProp name="ConstantTimer.delay">300</stringProp>
+            <stringProp name="RandomTimer.range">200.0</stringProp>
+          </GaussianRandomTimer>
+          <hashTree/>
+
+          <!-- Pause thread trong 500ms để mô phỏng thời gian đọc câu hỏi -->
+          <!-- action=1 = Pause, action=0 = Stop (khác nhau!) -->
+          <TestAction guiclass="TestActionGui" testclass="TestAction" testname="TC01-03 Answer Think Time" enabled="true">
+            <intProp name="ActionProcessor.action">1</intProp>
+            <intProp name="ActionProcessor.target">0</intProp>
+            <stringProp name="ActionProcessor.duration">500</stringProp>
+          </TestAction>
+          <hashTree/>
+        </hashTree>
+
+        <!-- ── STEP 4: POST Quiz Result ───────────────────────────────
+             Ghi kết quả quiz vào Firestore collection "quiz-results"
+             Firestore REST: POST /quiz-results (tạo document mới với auto-ID)
+             Body là Firestore document format (fields object)
+             ──────────────────────────────────────────────────────────── -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="TC01-04 POST Quiz Result" enabled="true">
+          <stringProp name="HTTPSampler.domain">firestore.googleapis.com</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/v1/projects/datn-quizapp/databases/(default)/documents/quizResults</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <!-- Firestore document format: mỗi field có type (stringValue, integerValue, v.v.) -->
+                <stringProp name="Argument.value">{
+  "fields": {
+    "userId":        { "stringValue": "${uid}" },
+    "quizId":        { "stringValue": "${quizId}" },
+    "score":         { "integerValue": "75" },
+    "correctAnswers":{ "integerValue": "8" },
+    "totalQuestions":{ "integerValue": "${questionCount}" },
+    "completedAt":   { "stringValue": "${__time(yyyy-MM-dd'T'HH:mm:ss'Z',)}" },
+    "timeSpent":     { "integerValue": "120" },
+    "source":        { "stringValue": "perf-test" }
+  }
+}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert 2xx" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49587">2</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">TC01-04: POST Quiz Result không trả về 2xx</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">2</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+
+        <!-- Pass/Fail Threshold — TC-01
+             Chạy ở cuối mỗi iteration, kiểm tra P95 và error rate
+             JSR223 Assertion dùng Groovy script để truy cập JMeter statistics
+             P95 ≤ 1000ms, error rate ≤ 1%
+        -->
+        <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="TC01 Pass/Fail Threshold" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script">
+// Lấy thống kê từ SampleResult hiện tại (chỉ kiểm tra response time của lần này)
+// Để kiểm tra P95 toàn bộ test, dùng Aggregate Report sau khi chạy xong
+def responseTime = prev.getTime()
+
+// Kiểm tra P95 proxy: nếu response time của sample này > 1000ms thì log warning
+// (P95 thực sự cần Aggregate Report hoặc backend listener)
+if (responseTime > 1000) {
+    log.warn("[TC01] Response time ${responseTime}ms vượt ngưỡng 1000ms tại " + prev.getSampleLabel())
+}
+
+// Assertion sẽ fail nếu response code là lỗi (đã có ResponseAssertion riêng)
+// Script này chỉ log, không fail assertion
+          </stringProp>
+        </JSR223Assertion>
+        <hashTree/>
+
+      </hashTree>
+      <!-- END TC-01 Thread Group -->
+
+
+      <!-- ═══════════════════════════════════════════════════════════════
+           TC-02: MULTIPLAYER FLOW — HOST THREAD GROUP
+           Users 1–40 là Host: tạo phòng, chờ player vào, bắt đầu game
+           Real-time sync dùng RTDB REST API + Cloud Function validateAnswer
+           ═══════════════════════════════════════════════════════════════ -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="TC-02 Multiplayer HOST" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <!-- Baseline: 5 hosts | Normal: 10 | Stress: 20 | Breaking: 40 -->
+        <stringProp name="ThreadGroup.num_threads">${__P(tc02_hosts,5)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(tc02_rampup,30)}</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">${__P(tc02_duration,300)}</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="CSV Users (Host)" enabled="true">
+          <stringProp name="filename">data/users.csv</stringProp>
+          <stringProp name="variableNames">uid,email,idToken</stringProp>
+          <stringProp name="delimiter">,</stringProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
+          <stringProp name="shareMode">shareMode.all</stringProp>
+          <boolProp name="ignoreFirstLine">true</boolProp>
+        </CSVDataSet>
+        <hashTree/>
+
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="CSV Quizzes (Host)" enabled="true">
+          <stringProp name="filename">data/quizzes.csv</stringProp>
+          <stringProp name="variableNames">quizId,questionCount</stringProp>
+          <stringProp name="delimiter">,</stringProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
+          <stringProp name="shareMode">shareMode.all</stringProp>
+          <boolProp name="ignoreFirstLine">true</boolProp>
+        </CSVDataSet>
+        <hashTree/>
+
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Auth Header (Host)" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Authorization</stringProp>
+              <stringProp name="Header.value">Bearer ${idToken}</stringProp>
+            </elementProp>
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <!-- ── HOST STEP 1: Tạo phòng trong Firestore ────────────────
+             POST /multiplayer_rooms — tạo document phòng chơi mới
+             Firestore tự generate ID cho document (dùng POST thay vì PUT)
+             Response trả về document name có chứa roomId mới tạo
+             ──────────────────────────────────────────────────────────── -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="TC02-H1 Create Room (Firestore)" enabled="true">
+          <stringProp name="HTTPSampler.domain">firestore.googleapis.com</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/v1/projects/datn-quizapp/databases/(default)/documents/multiplayer_rooms</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{
+  "fields": {
+    "name":       { "stringValue": "PerfTest Room ${__threadNum}" },
+    "hostId":     { "stringValue": "${uid}" },
+    "quizId":     { "stringValue": "${quizId}" },
+    "status":     { "stringValue": "waiting" },
+    "maxPlayers": { "integerValue": "5" },
+    "isPrivate":  { "booleanValue": false },
+    "createdAt":  { "stringValue": "${__time(yyyy-MM-dd'T'HH:mm:ss'Z',)}" },
+    "source":     { "stringValue": "perf-test" }
+  }
+}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert 2xx" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49587">2</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">TC02-H1: Create Room thất bại</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">2</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+
+          <!-- Extract roomId từ response — Firestore trả về "name" field chứa full path
+               Ví dụ: "name": "projects/datn-quizapp/.../multiplayer_rooms/ABC123"
+               Regex lấy phần cuối sau dấu / cuối cùng -->
+          <RegexExtractor guiclass="RegexExtractorGui" testclass="RegexExtractor" testname="Extract roomId" enabled="true">
+            <stringProp name="RegexExtractor.useHeaders">false</stringProp>
+            <stringProp name="RegexExtractor.refname">roomId</stringProp>
+            <stringProp name="RegexExtractor.regex">"name":\s*"[^"]+/([^"]+)"</stringProp>
+            <stringProp name="RegexExtractor.template">$1$</stringProp>
+            <stringProp name="RegexExtractor.default">ROOM_NOT_FOUND</stringProp>
+            <intProp name="RegexExtractor.match_number">1</intProp>
+          </RegexExtractor>
+          <hashTree/>
+
+          <!-- Chia sẻ roomId sang Player threads qua JMeter property
+               Dùng __setProperty(key, value) — property tồn tại suốt session
+               hostIndex = số thứ tự của host thread (1-based)
+               Player thread sẽ đọc roomCode_{hostIndex % maxHosts}
+          -->
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="Share roomId to Players" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script">
+// Lấy index của thread hiện tại (1-based)
+def hostIndex = ctx.getThreadNum() + 1
+def roomId    = vars.get("roomId")
+
+if (roomId &amp;&amp; roomId != "ROOM_NOT_FOUND") {
+    // Lưu roomId vào JMeter property để Player threads đọc được
+    // Property là global, shared across ALL thread groups
+    props.put("roomCode_${hostIndex}", roomId)
+    log.info("[TC02-Host] Thread ${hostIndex} tạo phòng: ${roomId}")
+} else {
+    log.warn("[TC02-Host] Thread ${hostIndex} không extract được roomId!")
+}
+            </stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
+
+        <!-- ── HOST STEP 2: Chờ players vào (3 giây fixed) ──────────── -->
+        <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="Wait 3s for Players" enabled="true">
+          <stringProp name="ConstantTimer.delay">3000</stringProp>
+        </ConstantTimer>
+        <hashTree/>
+
+        <!-- ── HOST STEP 3: Cập nhật trạng thái phòng sang "playing" ──
+             PATCH Firestore document để update field status
+             Firestore REST PATCH dùng ?updateMask.fieldPaths=status
+             ──────────────────────────────────────────────────────────── -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="TC02-H2 Start Game" enabled="true">
+          <stringProp name="HTTPSampler.domain">firestore.googleapis.com</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <!-- updateMask: chỉ update field "status", không ghi đè toàn bộ document -->
+          <stringProp name="HTTPSampler.path">/v1/projects/datn-quizapp/databases/(default)/documents/multiplayer_rooms/${roomId}?updateMask.fieldPaths=status&amp;updateMask.fieldPaths=startedAt</stringProp>
+          <stringProp name="HTTPSampler.method">PATCH</stringProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{
+  "fields": {
+    "status":    { "stringValue": "playing" },
+    "startedAt": { "stringValue": "${__time(yyyy-MM-dd'T'HH:mm:ss'Z',)}" }
+  }
+}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert 2xx" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49587">2</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">TC02-H2: Start Game thất bại</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">2</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+
+      </hashTree>
+      <!-- END TC-02 Host Thread Group -->
+
+
+      <!-- TC-02: PLAYER THREAD GROUP
+           Users 41–200 là Player: đọc roomId, join phòng, trả lời câu hỏi
+      -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="TC-02 Multiplayer PLAYER" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <!-- Baseline: 20 players | Normal: 50 | Stress: 100 | Breaking: 200 -->
+        <stringProp name="ThreadGroup.num_threads">${__P(tc02_players,20)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(tc02_rampup,30)}</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">${__P(tc02_duration,300)}</stringProp>
+        <!-- Delay 10s để cho Host thread tạo phòng trước -->
+        <stringProp name="ThreadGroup.delay">10</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="CSV Users (Player)" enabled="true">
+          <stringProp name="filename">data/users.csv</stringProp>
+          <stringProp name="variableNames">uid,email,idToken</stringProp>
+          <stringProp name="delimiter">,</stringProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
+          <stringProp name="shareMode">shareMode.all</stringProp>
+          <boolProp name="ignoreFirstLine">true</boolProp>
+        </CSVDataSet>
+        <hashTree/>
+
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Auth Header (Player)" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Authorization</stringProp>
+              <stringProp name="Header.value">Bearer ${idToken}</stringProp>
+            </elementProp>
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <!-- Lấy roomId từ JMeter property được Host thread ghi vào
+             Mỗi player lấy phòng của một host theo công thức: playerIndex % maxHosts
+             maxHosts = số host thread (Baseline: 5, Normal: 10, Stress: 20, Breaking: 40)
+        -->
+        <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="Read roomId from Host" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script">
+def playerIndex = ctx.getThreadNum() + 1
+def maxHosts    = Integer.parseInt(props.get("tc02_hosts") ?: "5")
+
+// Phân công player vào host theo vòng (round-robin)
+def hostIndex = ((playerIndex - 1) % maxHosts) + 1
+def roomId    = props.get("roomCode_${hostIndex}")
+
+if (roomId) {
+    vars.put("targetRoomId", roomId)
+    log.info("[TC02-Player] Thread ${playerIndex} → phòng của host ${hostIndex}: ${roomId}")
+} else {
+    // Phòng chưa được tạo — dùng placeholder, request sẽ fail (expected nếu player start quá sớm)
+    vars.put("targetRoomId", "WAITING_FOR_HOST")
+    log.warn("[TC02-Player] Thread ${playerIndex}: chưa có roomId từ host ${hostIndex} — thử lại sau")
+}
+          </stringProp>
+        </JSR223PreProcessor>
+        <hashTree/>
+
+        <!-- ── PLAYER STEP 1: Join Room ───────────────────────────────
+             Ghi player vào RTDB rooms/{roomId}/players/{uid}
+             RTDB REST PUT: đặt giá trị tại path
+             ──────────────────────────────────────────────────────────── -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="TC02-P1 Join Room (RTDB)" enabled="true">
+          <stringProp name="HTTPSampler.domain">datn-quizapp-default-rtdb.firebaseio.com</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <!-- RTDB REST: auth token truyền qua query param hoặc Authorization header -->
+          <stringProp name="HTTPSampler.path">/rooms/${targetRoomId}/players/${uid}.json?auth=${idToken}</stringProp>
+          <stringProp name="HTTPSampler.method">PUT</stringProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{
+  "id":       "${uid}",
+  "name":     "PerfPlayer ${__threadNum}",
+  "score":    0,
+  "isReady":  false,
+  "isOnline": true
+}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert 2xx" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49587">2</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">TC02-P1: Join Room thất bại</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">2</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+
+        <!-- ── PLAYER STEP 2: Get Questions via Cloud Function ────────
+             Cloud Function getPlayerQuestions — callable function
+             Gọi qua HTTP POST với body {"data": {...}}
+             Function này shuffle đáp án theo seed user+room để chống gian lận
+             ──────────────────────────────────────────────────────────── -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="TC02-P2 Get Player Questions" enabled="true">
+          <stringProp name="HTTPSampler.domain">us-central1-datn-quizapp.cloudfunctions.net</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/getPlayerQuestions</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <!-- Firebase Callable Function format: body phải có key "data" -->
+                <stringProp name="Argument.value">{"data": {"roomId": "${targetRoomId}", "userId": "${uid}"}}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert 2xx" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49587">2</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">TC02-P2: Get Player Questions thất bại</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">2</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+
+        <!-- ── PLAYER STEP 3: Answer Loop ─────────────────────────────
+             Lặp qua các câu hỏi, mỗi câu gọi Cloud Function validateAnswer
+             Think time: 2000ms fixed (mô phỏng countdown timer trong game)
+             ──────────────────────────────────────────────────────────── -->
+        <LoopController guiclass="LoopControlPanel" testclass="LoopController" testname="Answer Loop" enabled="true">
+          <stringProp name="LoopController.loops">5</stringProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </LoopController>
+        <hashTree>
+
+          <!-- Fixed 2000ms think time — mô phỏng timer đếm ngược trong game -->
+          <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="Think Time 2000ms" enabled="true">
+            <stringProp name="ConstantTimer.delay">2000</stringProp>
+          </ConstantTimer>
+          <hashTree/>
+
+          <!-- Gọi Cloud Function validateAnswer để submit câu trả lời
+               Function kiểm tra: auth, thời gian hợp lệ, không trùng lặp, đúng/sai
+               Trả về: {isCorrect, points, correctAnswer, timeToAnswer}
+          -->
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="TC02-P3 Submit Answer (validateAnswer)" enabled="true">
+            <stringProp name="HTTPSampler.domain">us-central1-datn-quizapp.cloudfunctions.net</stringProp>
+            <stringProp name="HTTPSampler.port">443</stringProp>
+            <stringProp name="HTTPSampler.protocol">https</stringProp>
+            <stringProp name="HTTPSampler.path">/validateAnswer</stringProp>
+            <stringProp name="HTTPSampler.method">POST</stringProp>
+            <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="" elementType="HTTPArgument">
+                  <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                  <!-- answer: 0-3 (index đáp án), questionIndex: thứ tự câu (0-based) -->
+                  <stringProp name="Argument.value">{"data": {"roomId": "${targetRoomId}", "questionIndex": ${__javaScript(Math.floor(Math.random()*5),)}, "answer": ${__javaScript(Math.floor(Math.random()*4),)}}}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+            <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          </HTTPSamplerProxy>
+          <hashTree>
+            <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert 2xx" enabled="true">
+              <collectionProp name="Asserion.test_strings">
+                <stringProp name="49587">2</stringProp>
+              </collectionProp>
+              <stringProp name="Assertion.custom_message">TC02-P3: validateAnswer thất bại</stringProp>
+              <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+              <boolProp name="Assertion.assume_success">false</boolProp>
+              <intProp name="Assertion.test_type">2</intProp>
+            </ResponseAssertion>
+            <hashTree/>
+          </hashTree>
+
+        </hashTree>
+        <!-- END Player Answer Loop -->
+
+      </hashTree>
+      <!-- END TC-02 Player Thread Group -->
+
+
+      <!-- ═══════════════════════════════════════════════════════════════
+           TC-03: CHATBOT RAG FLOW
+           Flow: gửi câu hỏi → nhận AI response → gửi follow-up (lặp 3 lần)
+           Gọi Firebase Callable Function "askRAG"
+           Timeout: 15000ms — AI response có thể chậm
+           ═══════════════════════════════════════════════════════════════ -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="TC-03 Chatbot RAG Flow" enabled="false">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <!-- Baseline: 5 | Normal: 15 | Stress: 30 | Breaking: 60 -->
+        <stringProp name="ThreadGroup.num_threads">${__P(tc03_users,5)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(tc03_rampup,30)}</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">${__P(tc03_duration,300)}</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="CSV Users (RAG)" enabled="true">
+          <stringProp name="filename">data/users.csv</stringProp>
+          <stringProp name="variableNames">uid,email,idToken</stringProp>
+          <stringProp name="delimiter">,</stringProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
+          <stringProp name="shareMode">shareMode.all</stringProp>
+          <boolProp name="ignoreFirstLine">true</boolProp>
+        </CSVDataSet>
+        <hashTree/>
+
+        <!-- CSV câu hỏi cho chatbot: 50 câu về SQA concepts -->
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="CSV Questions (RAG)" enabled="true">
+          <stringProp name="filename">data/questions.csv</stringProp>
+          <stringProp name="variableNames">question</stringProp>
+          <stringProp name="delimiter">,</stringProp>
+          <boolProp name="quotedData">true</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
+          <stringProp name="shareMode">shareMode.all</stringProp>
+          <boolProp name="ignoreFirstLine">true</boolProp>
+        </CSVDataSet>
+        <hashTree/>
+
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Auth Header (RAG)" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Authorization</stringProp>
+              <stringProp name="Header.value">Bearer ${idToken}</stringProp>
+            </elementProp>
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <!-- Khởi tạo conversation history cho session này
+             History được duy trì giữa các vòng lặp trong cùng 1 thread
+             Bắt đầu với array rỗng, sẽ được cập nhật sau mỗi câu hỏi
+        -->
+        <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="Init Chat History" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script">
+// Nếu chưa có history (đầu session), khởi tạo array rỗng
+if (!vars.get("chatHistory")) {
+    vars.put("chatHistory", "[]")
+    log.info("[TC03] Thread ${ctx.getThreadNum()+1}: bắt đầu session chat mới")
+}
+          </stringProp>
+        </JSR223PreProcessor>
+        <hashTree/>
+
+        <!-- ── Loop 3 lần: send question → receive response ───────────
+             Mỗi iteration: đọc câu hỏi từ CSV, gửi kèm history, cập nhật history
+             ──────────────────────────────────────────────────────────── -->
+        <LoopController guiclass="LoopControlPanel" testclass="LoopController" testname="3 Messages per Session" enabled="true">
+          <stringProp name="LoopController.loops">3</stringProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </LoopController>
+        <hashTree>
+
+          <!-- Think time trước mỗi tin nhắn: Gaussian 6000ms ± 1500ms
+               Mô phỏng thời gian người dùng gõ câu hỏi + đọc response
+          -->
+          <GaussianRandomTimer guiclass="GaussianRandomTimerGui" testclass="GaussianRandomTimer" testname="Think Time 6000ms±1500ms" enabled="true">
+            <stringProp name="ConstantTimer.delay">4500</stringProp>
+            <stringProp name="RandomTimer.range">1500.0</stringProp>
+          </GaussianRandomTimer>
+          <hashTree/>
+
+          <!-- ── Gửi câu hỏi đến askRAG Cloud Function ──────────────
+               askRAG là Firebase Callable Function
+               URL: https://us-central1-datn-quizapp.cloudfunctions.net/askRAG
+               Body format: {"data": {question, history, topK, targetLang}}
+               history: mảng {role, content} của các tin nhắn trước
+          -->
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="TC03-01 Ask RAG" enabled="true">
+            <stringProp name="HTTPSampler.domain">us-central1-datn-quizapp.cloudfunctions.net</stringProp>
+            <stringProp name="HTTPSampler.port">443</stringProp>
+            <stringProp name="HTTPSampler.protocol">https</stringProp>
+            <stringProp name="HTTPSampler.path">/askRAG</stringProp>
+            <stringProp name="HTTPSampler.method">POST</stringProp>
+            <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+            <!-- Timeout: 15000ms vì AI response có thể mất nhiều thời gian -->
+            <stringProp name="HTTPSampler.connect_timeout">15000</stringProp>
+            <stringProp name="HTTPSampler.response_timeout">15000</stringProp>
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="" elementType="HTTPArgument">
+                  <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                  <!-- ${chatHistory} được cập nhật bởi PostProcessor bên dưới -->
+                  <stringProp name="Argument.value">{"data": {"question": "${question}", "history": ${chatHistory}, "topK": 4, "targetLang": "vi"}}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+            <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          </HTTPSamplerProxy>
+          <hashTree>
+
+            <!-- Assertion 2xx -->
+            <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert 2xx" enabled="true">
+              <collectionProp name="Asserion.test_strings">
+                <stringProp name="49587">2</stringProp>
+              </collectionProp>
+              <stringProp name="Assertion.custom_message">TC03-01: askRAG không trả về 2xx</stringProp>
+              <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+              <boolProp name="Assertion.assume_success">false</boolProp>
+              <intProp name="Assertion.test_type">2</intProp>
+            </ResponseAssertion>
+            <hashTree/>
+
+            <!-- Duration Assertion: fail nếu response > 12000ms
+                 Ngưỡng thấp hơn timeout 15s để phát hiện sớm khi AI bị chậm
+            -->
+            <DurationAssertion guiclass="DurationAssertionGui" testclass="DurationAssertion" testname="Duration Assertion ≤12000ms" enabled="true">
+              <stringProp name="DurationAssertion.duration">12000</stringProp>
+            </DurationAssertion>
+            <hashTree/>
+
+            <!-- Phát hiện HTTP 429 (Gemini rate limit) và đánh dấu đặc biệt
+                 JSR223 PostProcessor chạy sau mỗi sample, kiểm tra response code
+                 Nếu là 429, log riêng để phân tích sau (không fail assertion)
+            -->
+            <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="Flag HTTP 429 Rate Limit" enabled="true">
+              <stringProp name="scriptLanguage">groovy</stringProp>
+              <stringProp name="script">
+def responseCode = prev.getResponseCode()
+def threadNum    = ctx.getThreadNum() + 1
+
+if (responseCode == "429") {
+    // Đánh dấu sample là lỗi đặc biệt để dễ lọc trong Aggregate Report
+    prev.setSampleLabel(prev.getSampleLabel() + " [RATE_LIMIT_429]")
+    log.warn("[TC03] Thread ${threadNum}: Gemini rate limit (429) — kiểm tra quotas tại Google Cloud Console")
+
+    // Ghi vào JMeter property để theo dõi tổng số lần bị rate limit
+    def currentCount = Integer.parseInt(props.get("gemini_rate_limit_count") ?: "0")
+    props.put("gemini_rate_limit_count", String.valueOf(currentCount + 1))
+}
+
+// Cập nhật conversation history nếu request thành công
+if (responseCode?.startsWith("2")) {
+    try {
+        def responseBody = prev.getResponseDataAsString()
+        // Callable Function response format: {"result": {"answer": "...", ...}}
+        def jsonSlurper  = new groovy.json.JsonSlurper()
+        def parsed       = jsonSlurper.parseText(responseBody)
+        def answer       = parsed?.result?.answer ?: parsed?.result?.response ?: ""
+
+        if (answer) {
+            // Cập nhật history: thêm câu hỏi vừa gửi + câu trả lời vừa nhận
+            def currentQuestion = vars.get("question") ?: ""
+            def historyStr      = vars.get("chatHistory") ?: "[]"
+            def history         = jsonSlurper.parseText(historyStr)
+
+            history &lt;&lt; [role: "user",      content: currentQuestion]
+            history &lt;&lt; [role: "assistant", content: answer.take(500)] // giới hạn 500 ký tự
+
+            // Giữ tối đa 6 tin nhắn gần nhất (3 cap QA) de tranh body qua lon
+            if (history.size() > 6) {
+                history = history.drop(history.size() - 6)
+            }
+
+            vars.put("chatHistory", groovy.json.JsonOutput.toJson(history))
+        }
+    } catch (Exception e) {
+        log.warn("[TC03] Không parse được response để cập nhật history: ${e.message}")
+    }
+}
+              </stringProp>
+            </JSR223PostProcessor>
+            <hashTree/>
+
+          </hashTree>
+          <!-- END TC03-01 Ask RAG -->
+
+        </hashTree>
+        <!-- END 3 Messages Loop -->
+
+        <!-- Reset history sau khi kết thúc session (chuẩn bị cho iteration tiếp theo) -->
+        <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="Reset Chat History" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script">
+// Xóa history để session tiếp theo bắt đầu từ đầu
+vars.put("chatHistory", "[]")
+          </stringProp>
+        </JSR223PostProcessor>
+        <hashTree/>
+
+      </hashTree>
+
+    </hashTree>
+    <!-- END TestPlan hashTree -->
+
+  </hashTree>
+</jmeterTestPlan>
+
