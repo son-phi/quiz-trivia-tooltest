@@ -42,6 +42,12 @@ def driver():
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--window-size=1920,1080")
     opts.add_argument("--disable-notifications")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--disable-software-rasterizer")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("--disable-background-networking")
+    opts.add_argument("--memory-pressure-off")
+    opts.add_argument("--js-flags=--max-old-space-size=512")
     # Selenium 4.6+ tự động quản lý driver, giải quyết lỗi WinError 193 của thư viện bên ngoài
     drv = webdriver.Chrome(options=opts)
     drv.implicitly_wait(10)
