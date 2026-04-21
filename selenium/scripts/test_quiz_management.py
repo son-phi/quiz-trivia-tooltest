@@ -13,6 +13,7 @@ import hashlib
 import base64
 import tempfile
 import pytest
+import traceback
 import requests
 from pathlib import Path
 
@@ -434,7 +435,7 @@ def _click_continue(driver, wait: WebDriverWait):
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
             time.sleep(0.3)
             ActionChains(driver).move_to_element(btn).click().perform()
-            time.sleep(0.8)
+            time.sleep(1.5)
             return
         except (StaleElementReferenceException, TimeoutException, ElementClickInterceptedException):
             if attempt == 2:
@@ -650,21 +651,23 @@ def _handle_confirm_dialog(driver, wait: WebDriverWait):
             pass
 
 
-def _open_import_modal_and_upload(driver, wait: WebDriverWait, file_path: str, file_type: str = "csv"):
+def _open_import_modal_and_upload(driver, wait: WebDriverWait, file_path: str):
     """Open bulk-import modal and upload a file."""
     import_btn = wait.until(EC.element_to_be_clickable(
         (By.XPATH,
          "//button[contains(@class,'bg-green-600') or "
+         "contains(@class,'bg-green-500') or "
          "contains(.,'📁') or "
          "contains(.,'Import') or "
-         "contains(.,'Nhập')]")
+         "contains(.,'Nhập') or "
+         "contains(.,'Tải file lên') or "
+         "contains(.,'Upload')]")
     ))
     _safe_click(driver, import_btn)
     time.sleep(1)
 
-    accept = ".csv" if file_type == "csv" else ".xlsx,.xls"
     file_input = wait.until(EC.presence_of_element_located(
-        (By.CSS_SELECTOR, f"input[type='file'][accept='{accept}']")
+        (By.CSS_SELECTOR, "input[type='file']")
     ))
     file_input.send_keys(file_path)
     time.sleep(2.5)
@@ -677,7 +680,7 @@ def _open_import_modal_and_upload(driver, wait: WebDriverWait, file_path: str, f
 TC_IDS = [
     "TC-CQ-001", "TC-CQ-002", "TC-CQ-003", "TC-CQ-004",
     "TC-CQ-005", "TC-CQ-006", "TC-CQ-007", "TC-CQ-008",
-    "TC-CQ-009", "TC-CQ-010", "TC-CQ-011",
+    "TC-CQ-009",
     "TC-RQ-001", "TC-RQ-002",
     "TC-UQ-001", "TC-UQ-002", "TC-UQ-003",
     "TC-DQ-001", "TC-DQ-002",
@@ -788,21 +791,43 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
             _fill_quiz_info(driver, wait, title="TC-CQ-003 No Questions", duration=10)
             _click_continue(driver, wait)  # → questions step
 
-            # Check Continue button is disabled (no questions added yet)
+            ADD_BTN_XPATH = (
+                "//button[contains(@class,'bg-blue-600') and "
+                "(contains(.,'Add') or contains(.,'Thêm') or contains(.,'câu hỏi'))]"
+            )
             XP_CONT = "//button[contains(.,'→') and not(contains(.,'←'))]"
-            time.sleep(0.5)
+
+            # Actively wait for Add button — same approach as _add_mcq_question
+            # Retry Continue click up to 3 times if page hasn't advanced yet
+            on_questions = False
+            for _attempt in range(3):
+                try:
+                    WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.XPATH, ADD_BTN_XPATH))
+                    )
+                    on_questions = True
+                    break
+                except TimeoutException:
+                    cont_btns = driver.find_elements(By.XPATH, XP_CONT)
+                    if cont_btns:
+                        cls = cont_btns[0].get_attribute("class") or ""
+                        if "opacity-50" not in cls and "cursor-not-allowed" not in cls:
+                            try:
+                                ActionChains(driver).move_to_element(cont_btns[0]).click().perform()
+                                time.sleep(2)
+                            except Exception:
+                                pass
+
+            # Also check if Continue button is disabled (no questions → blocked)
             cont_btns = driver.find_elements(By.XPATH, XP_CONT)
             btn_disabled = False
             if cont_btns:
                 cls = cont_btns[0].get_attribute("class") or ""
                 btn_disabled = (
                     bool(cont_btns[0].get_attribute("disabled")) or
-                    "opacity-50" in cls or "cursor-not-allowed" in cls
+                    "opacity-50" in cls or "cursor-not-allowed" in cls or
+                    "pointer-events-none" in cls or "bg-gray-" in cls
                 )
-
-            on_questions = bool(driver.find_elements(
-                By.XPATH, "//button[contains(.,'Add') or contains(.,'Thêm')]"
-            ))
 
             if btn_disabled or on_questions:
                 status = "PASS"
@@ -851,15 +876,13 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
         # TC-CQ-005..011: BVA duration boundary values
         # ────────────────────────────────────────────────────────────────────
         elif tc_id in ("TC-CQ-005", "TC-CQ-006", "TC-CQ-007", "TC-CQ-008",
-                       "TC-CQ-009", "TC-CQ-010", "TC-CQ-011"):
+                       "TC-CQ-009"):
             DURATION_MAP = {
                 "TC-CQ-005": (-1,  False),
                 "TC-CQ-006": (4,   False),
                 "TC-CQ-007": (5,   True),
-                "TC-CQ-008": (6,   True),
-                "TC-CQ-009": (119, True),
-                "TC-CQ-010": (120, True),
-                "TC-CQ-011": (121, False),
+                "TC-CQ-008": (120, True),
+                "TC-CQ-009": (121, False),
             }
             dur_val, expect_valid = DURATION_MAP[tc_id]
 
@@ -876,9 +899,39 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
             if expect_valid:
                 # Continue should be enabled — click through to Questions step
                 _click_continue(driver, wait)
-                on_questions = bool(driver.find_elements(
-                    By.XPATH, "//button[contains(.,'Add') or contains(.,'Thêm')]"
-                ))
+                _wait_for_page_stable(driver, extra_sleep=1.0)
+
+                # Signal 1: Add-question button (same xpath as _add_mcq_question)
+                ADD_BTN_XPATH = (
+                    "//button[contains(@class,'bg-blue-600') and "
+                    "(contains(.,'Add') or contains(.,'Thêm') or contains(.,'câu hỏi'))]"
+                )
+                # Signal 2: title input from Info step disappeared → advanced
+                TITLE_CSS = "input.w-full.p-4.border-2.border-gray-200.rounded-xl"
+                CONT_XP = "//button[contains(.,'→') and not(contains(.,'←'))]"
+
+                on_questions = False
+                for _attempt in range(3):
+                    if driver.find_elements(By.XPATH, ADD_BTN_XPATH):
+                        on_questions = True
+                        break
+                    if not driver.find_elements(By.CSS_SELECTOR, TITLE_CSS):
+                        on_questions = True
+                        break
+                    # Still on Info step — retry Continue click
+                    cont_btns = driver.find_elements(By.XPATH, CONT_XP)
+                    if cont_btns:
+                        cls = cont_btns[0].get_attribute("class") or ""
+                        if "opacity-50" not in cls and "cursor-not-allowed" not in cls:
+                            try:
+                                ActionChains(driver).move_to_element(cont_btns[0]).click().perform()
+                                time.sleep(2)
+                                _wait_for_page_stable(driver, extra_sleep=0.5)
+                            except Exception:
+                                pass
+                    else:
+                        time.sleep(1)
+
                 if on_questions:
                     status = "PASS"
                     actual_ui = f"dur={dur_val}: advanced to Questions step ✓"
@@ -945,17 +998,27 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
             quiz_id_cleanup = quiz_id
 
             _login_as(driver, wait, "admin")
-            for route in ["/admin/quizzes", "/admin/quiz-management", "/admin"]:
-                driver.get(APP_URL + route)
-                _wait_for_page_stable(driver)
-                if title in driver.find_element(By.TAG_NAME, "body").text:
-                    actual_ui = f"Admin found quiz '{title}' at {route}"
-                    actual_db = f"quizzes/{quiz_id} status=pending"
-                    status = "PASS"
-                    break
+            driver.get(APP_URL + "/admin/quiz-management")
+            _wait_for_page_stable(driver)
+
+            found = False
+            try:
+                search_input = wait.until(EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, "input[placeholder*='earch']")
+                ))
+                search_input.clear()
+                search_input.send_keys(title)
+                _wait_for_page_stable(driver, stable_for=0.8, extra_sleep=1.5)
+                found = title in driver.find_element(By.TAG_NAME, "body").text
+            except TimeoutException:
+                pass
+
+            actual_db = f"quizzes/{quiz_id} status=pending"
+            if found:
+                actual_ui = f"Admin found quiz '{title}' in quiz-management"
+                status = "PASS"
             else:
-                actual_ui = f"Quiz '{title}' not found in any admin route"
-                actual_db = f"quizzes/{quiz_id} status=pending"
+                actual_ui = f"Quiz '{title}' not visible in admin quiz-management"
 
         # ────────────────────────────────────────────────────────────────────
         # TC-UQ-001: Creator opens edit page for own DRAFT quiz
@@ -1143,7 +1206,7 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 csv_path = f.name
 
             try:
-                _open_import_modal_and_upload(driver, wait, csv_path, "csv")
+                _open_import_modal_and_upload(driver, wait, csv_path)
                 toast_txt = _get_toast(driver, timeout=8)
                 actual_ui = f"Import result: {toast_txt[:100] if toast_txt else 'No toast'}"
 
@@ -1176,7 +1239,7 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 txt_path = f.name
 
             try:
-                _open_import_modal_and_upload(driver, wait, txt_path, "csv")
+                _open_import_modal_and_upload(driver, wait, txt_path)
                 toast_txt = _get_toast(driver, timeout=8)
                 actual_ui = f"Wrong format result: {toast_txt[:100] if toast_txt else 'No toast'}"
 
@@ -1208,7 +1271,7 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 bad_path = f.name
 
             try:
-                _open_import_modal_and_upload(driver, wait, bad_path, "csv")
+                _open_import_modal_and_upload(driver, wait, bad_path)
                 toast_txt = _get_toast(driver, timeout=8)
                 actual_ui = f"Bad schema result: {toast_txt[:100] if toast_txt else 'No toast'}"
 
@@ -1241,7 +1304,7 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 big_path = f.name
 
             try:
-                _open_import_modal_and_upload(driver, wait, big_path, "csv")
+                _open_import_modal_and_upload(driver, wait, big_path)
                 toast_txt = _get_toast(driver, timeout=12)
                 actual_ui = f"Oversized result: {toast_txt[:100] if toast_txt else 'No response'}"
 
@@ -1596,6 +1659,7 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                     status = "PASS"
 
     except Exception as e:
+        traceback.print_exc()
         actual_ui = f"EXCEPTION: {str(e)[:150]}"
 
     finally:

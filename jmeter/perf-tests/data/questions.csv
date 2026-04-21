@@ -1,0 +1,51 @@
+question
+What is equivalence partitioning and how does it reduce the number of test cases?
+Explain the difference between boundary value analysis and equivalence partitioning.
+What are the three boundary values typically tested in boundary value analysis?
+Describe the difference between black-box testing and white-box testing.
+What is the main advantage of black-box testing from a tester's perspective?
+How does white-box testing achieve structural coverage of source code?
+What is the difference between verification and validation in software testing?
+Give a real-world example that illustrates the difference between verification and validation.
+What is the V-model and how does it relate testing phases to development phases?
+Define unit testing and explain what makes a good unit test.
+What is integration testing and what types of defects does it typically uncover?
+Explain the difference between top-down and bottom-up integration testing strategies.
+What is system testing and how does it differ from integration testing?
+What is acceptance testing and who typically performs it?
+Describe the difference between alpha testing and beta testing.
+What is regression testing and why is it important after code changes?
+Explain the concept of test coverage and why 100% coverage does not guarantee bug-free code.
+What is statement coverage and how is it measured?
+What is branch coverage and how does it differ from statement coverage?
+What is path coverage and why is it rarely achieved in practice?
+Define a test case and list its essential components.
+What is a test suite and how does it differ from a test plan?
+Explain the purpose of a test plan document in a software project.
+What is a defect life cycle and what are its typical states?
+Describe the difference between a bug, a defect, and a failure in software testing.
+What is a test oracle and why is it important in automated testing?
+Explain the concept of mutation testing and its purpose.
+What is fuzz testing and in what scenarios is it most useful?
+Describe the difference between functional and non-functional testing.
+What are examples of non-functional testing types and what do they measure?
+What is performance testing and what are its main subtypes?
+Explain the difference between load testing and stress testing.
+What is endurance testing and what kind of defects does it detect?
+Define spike testing and explain when it should be applied.
+What is security testing and what common vulnerabilities does it target?
+Explain SQL injection as a vulnerability and how testing can detect it.
+What is cross-site scripting (XSS) and how can testers verify it is prevented?
+What is usability testing and what criteria does it evaluate?
+Describe the difference between manual testing and automated testing.
+What are the main advantages and disadvantages of test automation?
+What is a test-driven development (TDD) approach and how does it affect test design?
+Explain the difference between TDD and behavior-driven development (BDD).
+What is exploratory testing and when is it most effective?
+Describe the concept of risk-based testing and how it prioritizes test cases.
+What is static testing and how does it differ from dynamic testing?
+Explain code review as a static testing technique and its benefits.
+What is a use case and how can it be used as a basis for test case design?
+Describe the decision table technique and when it is appropriate.
+What is state transition testing and what types of systems benefit from it?
+Explain the concept of test independence and why it matters in software quality assurance.

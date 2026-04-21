@@ -1,0 +1,50 @@
+{
+  "TC03-01 Ask RAG" : {
+    "transaction" : "TC03-01 Ask RAG",
+    "sampleCount" : 117,
+    "errorCount" : 1,
+    "errorPct" : 0.85470086,
+    "meanResTime" : 23407.290598290594,
+    "medianResTime" : 20889.0,
+    "minResTime" : 5230.0,
+    "maxResTime" : 73831.0,
+    "pct1ResTime" : 36450.200000000004,
+    "pct2ResTime" : 41982.7,
+    "pct3ResTime" : 68692.5399999998,
+    "throughput" : 0.7227620630223809,
+    "receivedKBytesPerSec" : 4.098879168622861,
+    "sentKBytesPerSec" : 0.9044600345782962
+  },
+  "TC03-01 Ask RAG [RATE_LIMIT_429]" : {
+    "transaction" : "TC03-01 Ask RAG [RATE_LIMIT_429]",
+    "sampleCount" : 63,
+    "errorCount" : 63,
+    "errorPct" : 100.0,
+    "meanResTime" : 10282.380952380954,
+    "medianResTime" : 10766.0,
+    "minResTime" : 245.0,
+    "maxResTime" : 11611.0,
+    "pct1ResTime" : 11160.2,
+    "pct2ResTime" : 11391.0,
+    "pct3ResTime" : 11611.0,
+    "throughput" : 0.7920244396112794,
+    "receivedKBytesPerSec" : 0.20811021632953244,
+    "sentKBytesPerSec" : 0.9997295095105792
+  },
+  "Total" : {
+    "transaction" : "Total",
+    "sampleCount" : 180,
+    "errorCount" : 64,
+    "errorPct" : 35.555557,
+    "meanResTime" : 18813.57222222221,
+    "medianResTime" : 15287.0,
+    "minResTime" : 245.0,
+    "maxResTime" : 73831.0,
+    "pct1ResTime" : 33815.700000000004,
+    "pct2ResTime" : 37825.549999999996,
+    "pct3ResTime" : 50707.929999999935,
+    "throughput" : 1.1119416354190477,
+    "receivedKBytesPerSec" : 4.201138948690072,
+    "sentKBytesPerSec" : 1.3957003089498947
+  }
+}
