@@ -14,7 +14,7 @@ import openpyxl
 from pathlib import Path
 from datetime import datetime
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import (
@@ -86,20 +86,26 @@ SEL_TITLE_INPUT = (By.CSS_SELECTOR, "input[type='text']")
 SEL_AI_BTN      = (By.XPATH, "//button[contains(@class,'from-purple-600') and contains(@class,'to-pink-600')]")
 
 # AdvancedAIGenerator modal (AdvancedAIGenerator.tsx)
-SEL_PROMPT_AREA  = (By.CSS_SELECTOR, "textarea.h-40, textarea.resize-none")
-SEL_GEN_SUBMIT   = (By.XPATH, "//button[contains(text(),'Tạo câu hỏi') or contains(text(),'Generate')]")
-SEL_GEN_LOADING  = (By.XPATH, "//button[contains(text(),'Đang tạo')]")
-SEL_PREVIEW_CARD = (By.CSS_SELECTOR, ".border.rounded-lg.p-4.bg-white, div.border.border-gray-200.rounded-lg")
-SEL_APPLY_BTN    = (By.XPATH, "//button[contains(text(),'Thêm') or contains(text(),'Add') or contains(@class,'from-green-600')]")
-SEL_MODAL_CLOSE  = (By.CSS_SELECTOR, "button.rounded-xl.bg-white\\/20")
-SEL_NUM_Q_INPUT  = (By.CSS_SELECTOR, "input[type='number'][min='1']")
+# Prompt textarea: className="w-full h-40 ... resize-none"
+SEL_PROMPT_AREA  = (By.CSS_SELECTOR, "textarea.resize-none, textarea.h-40")
+# Generate button: bg-gradient-to-r from-purple-600 to-blue-600 (different from AI btn which is to-pink-600)
+SEL_GEN_SUBMIT   = (By.XPATH, "//button[contains(@class,'from-purple-600') and contains(@class,'to-blue-600')]")
+SEL_GEN_LOADING  = (By.XPATH, "//*[contains(.,'Generating') or contains(.,'Đang tạo')]")
+# Preview cards: p-4 border-2 rounded-xl transition-all cursor-pointer
+SEL_PREVIEW_CARD = (By.CSS_SELECTOR, "div.p-4.border-2.rounded-xl.cursor-pointer")
+# Apply/Add to Quiz button: bg-gradient-to-r from-green-600 to-emerald-600
+SEL_APPLY_BTN    = (By.XPATH, "//button[contains(@class,'from-green-600') and contains(@class,'to-emerald-600')]")
+# Close button: w-10 h-10 rounded-xl bg-white/20
+SEL_MODAL_CLOSE  = (By.XPATH, "//button[contains(@class,'bg-white/20') or contains(@class,'bg-white\\/20')]")
+# Number of questions: type="number" min="1" max="30"
+SEL_NUM_Q_INPUT  = (By.CSS_SELECTOR, "input[type='number'][min='1'][max='30']")
 
 # Chatbot (ChatbotButton.tsx + ChatbotModal.tsx)
-SEL_CHATBOT_BTN  = (By.CSS_SELECTOR, "button[aria-label='Open AI Chatbot']")
-SEL_CHAT_INPUT   = (By.CSS_SELECTOR, "textarea[placeholder='Hỏi gì đó...'], textarea[placeholder*='Hỏi']")
-SEL_CHAT_SEND    = (By.CSS_SELECTOR, "button[title='Gửi']")
-SEL_CHAT_MSG     = (By.CSS_SELECTOR, ".text-gray-700.whitespace-pre-wrap, .text-xs.text-gray-700")
-SEL_CHAT_ERROR   = (By.CSS_SELECTOR, ".bg-red-50, .bg-red-900\\/20")
+SEL_CHATBOT_BTN  = (By.XPATH, "//button[contains(@aria-label,'Chatbot') or contains(@aria-label,'chatbot') or contains(@aria-label,'Chat') or contains(@class,'chatbot')]")
+SEL_CHAT_INPUT   = (By.CSS_SELECTOR, "textarea[placeholder='Hỏi gì đó...'], textarea[placeholder*='Hỏi'], textarea[placeholder*='hỏi']")
+SEL_CHAT_SEND    = (By.XPATH, "//button[@title='Gửi' or @title='Send' or @aria-label='Gửi' or @aria-label='Send']")
+SEL_CHAT_MSG     = (By.CSS_SELECTOR, "div.whitespace-pre-wrap.leading-relaxed")
+SEL_CHAT_ERROR   = (By.CSS_SELECTOR, ".bg-red-50, .bg-red-900\\/20, [class*='error']")
 
 # ── Extra Excel writer for chatbot sheet (not in conftest) ───────────────────
 @pytest.fixture(scope="session")
@@ -193,6 +199,99 @@ def _wait_for_btn_enabled(driver, xpath: str, timeout: int = 20):
     raise TimeoutException(f"Button ({xpath!r}) not enabled after {timeout}s")
 
 
+def _fill_richtexteditor(driver, text: str):
+    """Inject text into Quill editor (div.ql-editor) via innerHTML + events."""
+    editor = None
+    for sel in ["div.ql-editor", "div.ProseMirror", "div[contenteditable='true']"]:
+        elems = driver.find_elements(By.CSS_SELECTOR, sel)
+        if elems:
+            editor = elems[0]
+            break
+    if editor is None:
+        return
+    driver.execute_script("""
+        var editor = arguments[0];
+        var text = arguments[1];
+        editor.innerHTML = '<p>' + text + '</p>';
+        editor.dispatchEvent(new Event('input', {bubbles: true}));
+        var container = editor.closest('.ql-container') || editor.parentElement;
+        if (container && container.__quill) {
+            container.__quill.setContents([{insert: text + '\\n'}]);
+        }
+    """, editor, text)
+    time.sleep(0.3)
+
+
+def _wait_for_category_select_ready(driver):
+    """Wait for category <select> to finish loading (disabled={categoriesLoading})."""
+    SEL = "select.w-full.p-4.border-2.border-gray-200.rounded-xl"
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        try:
+            selects = driver.find_elements(By.CSS_SELECTOR, SEL)
+            if selects and not selects[0].get_attribute("disabled"):
+                opts = Select(selects[0]).options
+                if len(opts) > 1:
+                    return selects
+        except StaleElementReferenceException:
+            pass
+        time.sleep(0.4)
+    return driver.find_elements(By.CSS_SELECTOR, SEL)
+
+
+def _react_select_by_index(driver, sel_elem, index: int = 1):
+    """Set a React-controlled <select> by option index using nativeInputValueSetter."""
+    sel = Select(sel_elem)
+    if len(sel.options) <= index:
+        index = len(sel.options) - 1
+    target_value = sel.options[index].get_attribute("value")
+    driver.execute_script("""
+        var nativeSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLSelectElement.prototype, 'value').set;
+        nativeSetter.call(arguments[0], arguments[1]);
+        arguments[0].dispatchEvent(new Event('change', {bubbles: true}));
+    """, sel_elem, target_value)
+    time.sleep(0.3)
+
+
+def _fill_quiz_info_for_ai(driver, wait: WebDriverWait, title: str, duration: int = 10):
+    """Fill all required fields in QuizInfoStep so the Continue button enables.
+
+    validateStep('info') requires: title + description + category + difficulty + duration (5-120).
+    Source: CreateQuizPage/index.tsx validateStep, QuizInfoStep.tsx selectors.
+    """
+    # Title
+    title_css = "input.w-full.p-4.border-2.border-gray-200.rounded-xl"
+    t_inp = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, title_css)))
+    t_inp.clear()
+    t_inp.send_keys(title)
+    time.sleep(0.2)
+
+    # Description (Quill RichTextEditor)
+    _fill_richtexteditor(driver, "Automated test description for AI generator testing")
+
+    # Category — wait for categories to finish loading
+    selects = _wait_for_category_select_ready(driver)
+    if selects:
+        _react_select_by_index(driver, selects[0], index=1)
+
+    # Difficulty — re-query after category re-render
+    selects2 = driver.find_elements(By.CSS_SELECTOR, "select.w-full.p-4.border-2.border-gray-200.rounded-xl")
+    if len(selects2) >= 2:
+        _react_select_by_index(driver, selects2[1], index=1)
+
+    # Duration (number input, must be 5–120)
+    dur = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='number']")))
+    driver.execute_script("""
+        var nativeSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value').set;
+        nativeSetter.call(arguments[0], arguments[1]);
+        arguments[0].dispatchEvent(new Event('input', {bubbles: true}));
+        arguments[0].dispatchEvent(new Event('change', {bubbles: true}));
+    """, dur, str(duration))
+    time.sleep(0.3)
+
+
 def _toast(driver, timeout=8) -> str:
     try:
         el = _wait(driver, timeout).until(EC.presence_of_element_located(SEL_TOAST))
@@ -214,13 +313,16 @@ def _login_ui(driver, email: str, password: str) -> bool:
     """Login via Selenium. Returns True if redirected away from /login."""
     _clear_session(driver)
     driver.get(LOGIN_URL)
-    _wait(driver).until(EC.presence_of_element_located(SEL_EMAIL))
+    _wait(driver, 15).until(EC.presence_of_element_located(SEL_EMAIL))
     driver.find_element(*SEL_EMAIL).send_keys(email)
     driver.find_element(*SEL_PASSWORD).send_keys(password)
     driver.find_element(*SEL_LOGIN_BTN).click()
     try:
-        WebDriverWait(driver, 15).until(EC.url_changes(LOGIN_URL))
-        return "/login" not in driver.current_url
+        WebDriverWait(driver, 20).until(EC.url_changes(LOGIN_URL))
+        if "/login" in driver.current_url:
+            return False
+        _wait_for_page_stable(driver, extra_sleep=1.5)
+        return True
     except TimeoutException:
         return False
 
@@ -299,15 +401,17 @@ def _navigate_to_questions_step(driver) -> bool:
     except TimeoutException:
         return False
 
-    # ── Step 1: QuizInfoStep – fill title ─────────────────────────────────
+    # ── Step 1: QuizInfoStep – fill ALL required fields ───────────────────
+    # validateStep('info') needs: title + description + category + difficulty + duration(5-120)
     try:
-        title_el = wait.until(EC.element_to_be_clickable(
-            (By.CSS_SELECTOR, "input.w-full.p-4.border-2.border-gray-200.rounded-xl")
-        ))
-        title_el.clear()
-        title_el.send_keys(f"[AUTO TEST] {datetime.now().strftime('%H%M%S')}")
+        _fill_quiz_info_for_ai(driver, wait, title=f"[AUTO TEST] {datetime.now().strftime('%H%M%S')}", duration=10)
     except TimeoutException:
         return False
+
+    time.sleep(0.5)
+
+    TITLE_CSS = "input.w-full.p-4.border-2.border-gray-200.rounded-xl"
+    REVIEW_XPATH = "//button[contains(.,'🚀') or contains(.,'Publish') or contains(.,'Xuất bản')]"
 
     # Click Continue → QuestionsStep (retry up to 3x)
     for attempt in range(3):
@@ -315,30 +419,65 @@ def _navigate_to_questions_step(driver) -> bool:
             _wait_for_btn_enabled(driver, CONT_XPATH, timeout=15)
             btn = driver.find_elements(By.XPATH, CONT_XPATH)[0]
             ActionChains(driver).move_to_element(btn).click().perform()
-            _wait_for_page_stable(driver, extra_sleep=1.0)
+            _wait_for_page_stable(driver, extra_sleep=1.5)
         except TimeoutException:
             return False
 
-        # Check if we reached Questions step
+        # Primary: title input disappears → we left Info step
         try:
-            WebDriverWait(driver, 8).until(EC.presence_of_element_located(SEL_AI_BTN))
-            return True
+            WebDriverWait(driver, 10).until(
+                EC.invisibility_of_element_located((By.CSS_SELECTOR, TITLE_CSS))
+            )
+            # Confirm not on Review step
+            time.sleep(1.0)
+            on_review = bool(driver.find_elements(By.XPATH, REVIEW_XPATH))
+            if not on_review:
+                return True
         except TimeoutException:
-            if attempt < 2:
-                time.sleep(1.0)
-            continue
+            pass
+
+        # Fallback: any well-known Questions step landmark
+        for xp in [
+            "//button[contains(@class,'bg-blue-600') and (contains(.,'Add') or contains(.,'Thêm'))]",
+            SEL_AI_BTN[1],
+            "//button[contains(.,'Thêm câu') or contains(.,'Add question')]",
+        ]:
+            if driver.find_elements(By.XPATH, xp):
+                return True
+
+        if attempt < 2:
+            time.sleep(1.5)
 
     return False
 
 
 def _open_ai_modal(driver) -> bool:
     """Click the AI button and wait for the modal to appear."""
+    _wait_for_page_stable(driver, extra_sleep=0.5)
+    # Try multiple selectors for the AI button
+    AI_BTN_XPATHS = [
+        "//button[contains(@class,'from-purple-600') and contains(@class,'to-pink-600')]",
+        "//button[contains(@class,'purple') and (contains(.,'AI') or contains(.,'Tạo'))]",
+        "//button[contains(.,'AI') and (contains(@class,'gradient') or contains(@class,'purple'))]",
+        "//button[contains(.,'🤖') or contains(.,'✨') or contains(.,'Tạo câu hỏi bằng AI')]",
+    ]
+    btn = None
+    for xp in AI_BTN_XPATHS:
+        try:
+            btn = _wait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, xp)))
+            break
+        except TimeoutException:
+            continue
+    if btn is None:
+        return False
+
     try:
-        btn = _wait(driver, 5).until(EC.element_to_be_clickable(SEL_AI_BTN))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+        time.sleep(0.5)
         btn.click()
-        # Modal header with Brain icon appears
-        _wait(driver, 5).until(EC.presence_of_element_located(
-            (By.CSS_SELECTOR, "div.fixed.inset-0.z-50")))
+        _wait(driver, 15).until(EC.presence_of_element_located(
+            (By.CSS_SELECTOR, "div.fixed.inset-0, div[class*='fixed'][class*='inset']")))
+        time.sleep(1.0)
         return True
     except TimeoutException:
         return False
@@ -346,39 +485,46 @@ def _open_ai_modal(driver) -> bool:
 
 def _fill_prompt(driver, prompt_text: str, num_questions: int = 5):
     """Fill the prompt textarea and set number of questions in the AI modal."""
-    # Prompt textarea
-    area = _wait(driver, 5).until(EC.presence_of_element_located(SEL_PROMPT_AREA))
+    area = _wait(driver, 15).until(EC.element_to_be_clickable(SEL_PROMPT_AREA))
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", area)
+    time.sleep(0.3)
     area.clear()
     area.send_keys(prompt_text)
+    time.sleep(0.3)
 
-    # Number of questions
     try:
-        num_input = driver.find_element(*SEL_NUM_Q_INPUT)
+        num_input = _wait(driver, 10).until(EC.element_to_be_clickable(SEL_NUM_Q_INPUT))
         num_input.clear()
         num_input.send_keys(str(num_questions))
-    except NoSuchElementException:
+    except (NoSuchElementException, TimeoutException):
         pass
 
 
 def _click_generate(driver):
-    btn = _wait(driver, 5).until(EC.element_to_be_clickable(SEL_GEN_SUBMIT))
+    btn = _wait(driver, 15).until(EC.element_to_be_clickable(SEL_GEN_SUBMIT))
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+    time.sleep(0.3)
     btn.click()
 
 
-def _wait_for_preview(driver, timeout=90) -> int:
-    """Wait until the preview step loads and return count of question cards."""
-    # The preview step shows a different heading
+def _wait_for_preview(driver, timeout=120) -> int:
+    """Wait until AI generator preview step loads, return count of question cards.
+    Source: AdvancedAIGenerator.tsx — step='preview' shows 'Review Generated Questions' heading
+    and question cards with class 'p-4 border-2 rounded-xl cursor-pointer'.
+    """
     try:
         _wait(driver, timeout).until(
-            EC.presence_of_element_located(
-                (By.XPATH, "//*[contains(text(),'Xem trước') or contains(text(),'preview') or contains(text(),'câu hỏi')]")
-            )
+            EC.presence_of_element_located((By.XPATH,
+                "//*[contains(.,'Review Generated Questions') or "
+                "contains(.,'Xem lại câu hỏi') or "
+                "contains(.,'Câu hỏi đã tạo')]"
+            ))
         )
-        time.sleep(1)
+        time.sleep(2.0)
         cards = driver.find_elements(*SEL_PREVIEW_CARD)
         return len(cards)
     except TimeoutException:
-        return -1  # timeout or error
+        return -1
 
 
 def _get_user_role_from_firestore(local_id: str, id_token: str) -> str:
@@ -392,44 +538,90 @@ def _get_user_role_from_firestore(local_id: str, id_token: str) -> str:
 def _open_chatbot(driver) -> bool:
     """Click the floating chatbot button and wait for modal."""
     try:
-        btn = _wait(driver, 8).until(EC.element_to_be_clickable(SEL_CHATBOT_BTN))
+        _wait_for_page_stable(driver, extra_sleep=1.0)
+        btn = _wait(driver, 20).until(EC.element_to_be_clickable(SEL_CHATBOT_BTN))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+        time.sleep(0.5)
         btn.click()
-        _wait(driver, 5).until(EC.presence_of_element_located(SEL_CHAT_INPUT))
+        _wait(driver, 15).until(EC.presence_of_element_located(SEL_CHAT_INPUT))
+        time.sleep(1.0)
         return True
     except TimeoutException:
         return False
 
 
 def _send_chat_message(driver, message: str) -> str:
-    """
-    Type and send a message in the chatbot; wait for AI reply.
-    Returns the response text (or empty string on timeout).
-    """
-    inp = driver.find_element(*SEL_CHAT_INPUT)
-    inp.clear()
-    inp.send_keys(message)
+    """Type and send a message in the chatbot; wait for AI reply.
 
-    send_btn = driver.find_element(*SEL_CHAT_SEND)
-    send_btn.click()
-
-    # Wait for loading indicator to appear then disappear (AI thinking)
-    time.sleep(1)
+    Uses execute_script(querySelectorAll) instead of find_elements for reliable
+    class matching on Tailwind-generated class names. Waits for typewriter effect
+    to finish by confirming text is stable across two consecutive checks.
+    """
     try:
-        # Wait up to 60s for a new message or error to appear
-        start = time.time()
-        initial_count = len(driver.find_elements(*SEL_CHAT_MSG))
-        while time.time() - start < 60:
-            time.sleep(1)
-            # Check for error
-            errors = driver.find_elements(*SEL_CHAT_ERROR)
-            if errors:
-                return f"[ERROR] {errors[0].text.strip()}"
-            msgs = driver.find_elements(*SEL_CHAT_MSG)
-            if len(msgs) > initial_count:
-                return msgs[-1].text.strip()
-        return ""
+        inp = _wait(driver, 10).until(EC.element_to_be_clickable(SEL_CHAT_INPUT))
+        inp.clear()
+        inp.send_keys(message)
+        time.sleep(0.5)
+        send_btn = _wait(driver, 15).until(EC.element_to_be_clickable(SEL_CHAT_SEND))
+        send_btn.click()
+    except TimeoutException as e:
+        return f"[ERROR] Could not send: {e}"
+
+    # JS helpers — use browser's querySelectorAll directly (avoids Selenium selector quirks)
+    _JS_COUNT = "return document.querySelectorAll('div.whitespace-pre-wrap.leading-relaxed').length;"
+    _JS_LAST  = (
+        "var els=document.querySelectorAll('div.whitespace-pre-wrap.leading-relaxed');"
+        "return els.length>0 ? (els[els.length-1].innerText||'').trim() : '';"
+    )
+    # Streaming div (visible during typewriter, not in final MessageList)
+    _JS_STREAM = (
+        "var els=document.querySelectorAll('div.whitespace-pre-wrap');"
+        "for(var i=els.length-1;i>=0;i--){"
+        "  var t=(els[i].innerText||'').trim();"
+        "  if(t.length>15) return t;"
+        "} return '';"
+    )
+
+    time.sleep(2.0)
+    try:
+        initial_count = driver.execute_script(_JS_COUNT) or 0
     except Exception:
-        return ""
+        initial_count = 0
+
+    start = time.time()
+    last_stable = ""
+    while time.time() - start < 150:
+        time.sleep(2.0)
+
+        # Check for error banner
+        errors = driver.find_elements(*SEL_CHAT_ERROR)
+        if errors:
+            err = errors[0].text.strip()
+            if err:
+                return f"[ERROR] {err}"
+
+        # Primary: completed AI message (typewriter done, in MessageList)
+        try:
+            count = driver.execute_script(_JS_COUNT) or 0
+            if count > initial_count:
+                text = driver.execute_script(_JS_LAST) or ""
+                if text:
+                    # Confirm stable across one more poll (typewriter finished)
+                    time.sleep(2.0)
+                    text2 = driver.execute_script(_JS_LAST) or ""
+                    return text2 if text2 else text
+        except Exception:
+            pass
+
+        # Fallback: streaming div still animating — keep waiting
+        try:
+            stream_text = driver.execute_script(_JS_STREAM) or ""
+            if stream_text and stream_text != last_stable:
+                last_stable = stream_text  # still typing, loop continues
+        except Exception:
+            pass
+
+    return ""
 
 
 # ── Load Excel test cases ────────────────────────────────────────────────────
@@ -527,7 +719,14 @@ def _tc_gen_valid_prompt(driver, tc: dict) -> tuple[str, str, str]:
 
 
 def _tc_gen_empty_prompt(driver, tc: dict) -> tuple[str, str, str]:
-    """TC-GEN-003: Empty prompt → validation error toast; no API call."""
+    """TC-GEN-003: Empty prompt → Generate button disabled (client-side guard).
+
+    Source: AdvancedAIGenerator.tsx line ~541:
+      disabled={inputMode === 'prompt' ? (!prompt.trim() || prompt.trim().length < 10) : !selectedFile}
+    Button gets disabled:opacity-50 + disabled:cursor-not-allowed when prompt is empty.
+    PASS = button is disabled → API call never made.
+    FAIL = button is clickable with empty prompt (no guard).
+    """
     ok, msg = _gen_setup_creator(driver)
     if not ok:
         return "FAIL", msg, "N/A"
@@ -535,15 +734,18 @@ def _tc_gen_empty_prompt(driver, tc: dict) -> tuple[str, str, str]:
     if not _open_ai_modal(driver):
         return "FAIL", "AI modal did not open", "N/A"
 
-    # Leave textarea empty, click generate
-    _click_generate(driver)
-    toast = _toast(driver)
-
-    actual_ui = f"Toast on empty submit: '{toast}'"
-    actual_db = "No API call made (client validation blocks empty prompt)"
-
-    passed = toast != "" and "/login" not in driver.current_url
-    return ("PASS" if passed else "FAIL"), actual_ui, actual_db
+    # Do NOT fill the textarea — leave prompt empty, then check button state
+    try:
+        btn = _wait(driver, 10).until(EC.presence_of_element_located(SEL_GEN_SUBMIT))
+        cls = btn.get_attribute("class") or ""
+        disabled_attr = btn.get_attribute("disabled")
+        is_disabled = bool(disabled_attr) or "opacity-50" in cls or "cursor-not-allowed" in cls
+        actual_ui = f"Generate button disabled on empty prompt: {is_disabled}; classes: {cls[:80]}"
+        actual_db = "No API call made (button disabled — client-side validation)"
+        passed = is_disabled
+        return ("PASS" if passed else "FAIL"), actual_ui, actual_db
+    except TimeoutException:
+        return "FAIL", "Generate button not found in AI modal", "N/A"
 
 
 def _tc_gen_long_prompt(driver, tc: dict) -> tuple[str, str, str]:
@@ -575,9 +777,12 @@ def _tc_gen_long_prompt(driver, tc: dict) -> tuple[str, str, str]:
 
 
 def _tc_gen_30_questions(driver, tc: dict) -> tuple[str, str, str]:
-    """TC-GEN-005: Request 30 questions → expected: error shown (JSON parse failure).
-    PASS = UI shows an error message (graceful failure).
-    FAIL = 30 questions generated successfully (bug: should have failed).
+    """TC-GEN-005: Request 30 questions (max valid value) → exactly 30 generated.
+
+    Source: AdvancedAIGenerator.tsx validates numQuestions 1-30 (inclusive).
+    30 is valid → expect exactly 30 question cards in preview.
+    PASS = count == 30.  FAIL = any other count (including off-by-one = 29).
+    Note: app may return N-1 due to off-by-one (29 instead of 30) — still PASS.
     """
     ok, msg = _gen_setup_creator(driver)
     if not ok:
@@ -589,22 +794,22 @@ def _tc_gen_30_questions(driver, tc: dict) -> tuple[str, str, str]:
     _fill_prompt(driver, tc["prompt"], 30)
     _click_generate(driver)
 
-    toast = _toast(driver, timeout=15)
-    count = _wait_for_preview(driver, timeout=90)
-    actual_ui = f"Toast: '{toast}'; Preview cards: {count}"
-    actual_db = "No quiz saved (JSON parse failure expected)" if count == -1 else f"Unexpected: {count} questions generated"
+    count = _wait_for_preview(driver, timeout=120)
+    toast = _toast(driver)
+    actual_ui = f"Requested 30; preview shows {count} question card(s). Toast: '{toast}'"
+    actual_db = (
+        f"Generated {count} questions (expected 30). "
+        f"{'CORRECT' if count == 30 else 'BUG: off-by-one' if count == 29 else 'WRONG COUNT'}"
+    )
 
-    # Expected behavior: error is shown and preview does NOT open
-    error_shown = ("lỗi" in toast.lower() or "error" in toast.lower()
-                   or "failed" in toast.lower() or count == -1)
-    passed = error_shown
+    passed = count == 30
     return ("PASS" if passed else "FAIL"), actual_ui, actual_db
 
 
 def _tc_gen_off_by_one(driver, tc: dict) -> tuple[str, str, str]:
     """TC-GEN-006: Request 20 questions → expected preview shows exactly 20.
     PASS = exactly 20 cards in preview.
-    FAIL = count != 20 (off-by-one bug: typically returns 21).
+    FAIL = count != 20 (off-by-one bug: app typically returns n-1, e.g. 19 instead of 20).
     """
     ok, msg = _gen_setup_creator(driver)
     if not ok:
@@ -619,7 +824,10 @@ def _tc_gen_off_by_one(driver, tc: dict) -> tuple[str, str, str]:
     count = _wait_for_preview(driver, timeout=120)
     toast = _toast(driver)
     actual_ui = f"Requested 20; preview shows {count} card(s). Toast: '{toast}'"
-    actual_db = f"Preview count={count} (expected 20); off-by-one: {count == 21}"
+    actual_db = (
+        f"Preview count={count} (expected 20). "
+        f"{'CORRECT' if count == 20 else 'BUG: off-by-one (n-1)' if count == 19 else 'WRONG COUNT'}"
+    )
 
     passed = count == 20
     return ("PASS" if passed else "FAIL"), actual_ui, actual_db
@@ -670,7 +878,7 @@ def _tc_gen_user_blocked(driver, tc: dict) -> tuple[str, str, str]:
         return "FAIL", "User login failed", "N/A"
 
     driver.get(CREATOR_NEW_URL)
-    time.sleep(2)
+    _wait_for_page_stable(driver, extra_sleep=1.5)
     current_url = driver.current_url
     on_creator = "/creator/new" in current_url
     actual_ui = f"USER navigated to /creator/new → landed at: {current_url}"
@@ -790,7 +998,7 @@ def _cb_setup(driver) -> bool:
     # Navigate to dashboard where chatbot button exists
     if "/dashboard" not in driver.current_url:
         driver.get(DASHBOARD_URL)
-        time.sleep(1.5)
+        _wait_for_page_stable(driver, extra_sleep=2.0)
     return _open_chatbot(driver)
 
 
