@@ -60,7 +60,8 @@ SEL_TOAST          = (By.CSS_SELECTOR, ".Toastify__toast")
 # Logout button in Header dropdown: red text, contains LogOut icon
 SEL_LOGOUT_BTN     = (By.CSS_SELECTOR, "button.text-red-600")
 # User avatar / menu trigger in Header (opens dropdown)
-SEL_USER_MENU      = (By.CSS_SELECTOR, "button[aria-label='user-menu'], img.rounded-full, .cursor-pointer.rounded-full")
+# Avatar là div chứa chữ cái (không phải <img>), button có class rounded-xl
+SEL_USER_MENU      = (By.CSS_SELECTOR, "header button.rounded-xl")
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -173,19 +174,40 @@ def _resolve_creds(raw_email, raw_password):
 
 
 def _do_logout_via_ui(driver):
-    """Open user menu in Header and click the Đăng xuất (logout) button."""
-    # Try to click avatar / user menu opener
-    try:
-        menu_btn = _wait(driver, 5).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR,
-                "img.rounded-full, button img.rounded-full, [data-testid='user-menu']"))
-        )
-        menu_btn.click()
-    except TimeoutException:
-        # Fallback: try any button that could be the menu trigger
-        driver.find_element(By.CSS_SELECTOR, "header button:last-child").click()
+    """Open user menu in Header and click the Đăng xuất (logout) button.
 
-    time.sleep(0.5)  # wait for dropdown animation
+    Avatar là div chứa chữ cái đầu (không phải <img>), nên img.rounded-full
+    không tồn tại. Dùng các selector theo thứ tự ưu tiên:
+      1. header button.rounded-xl  – class duy nhất trên nút user menu
+      2. XPath – tìm button trong header chứa text role (Người tạo / Admin / ...)
+      3. header button:last-of-type – fallback cuối
+    """
+    _MENU_SELECTORS = [
+        # Selector chính: button user menu có class rounded-xl trong header
+        (By.CSS_SELECTOR, "header button.rounded-xl"),
+        # Fallback 1: button cuối cùng trong header
+        (By.CSS_SELECTOR, "header button:last-of-type"),
+        # Fallback 2: tìm theo text role hiển thị trong button
+        (By.XPATH, "//header//button[contains(., 'Người tạo') or contains(., 'Admin') or contains(., 'Người dùng') or contains(., 'Creator')]"),
+    ]
+
+    menu_clicked = False
+    for locator in _MENU_SELECTORS:
+        try:
+            menu_btn = _wait(driver, 4).until(EC.element_to_be_clickable(locator))
+            menu_btn.click()
+            menu_clicked = True
+            break
+        except (TimeoutException, Exception):
+            continue
+
+    if not menu_clicked:
+        raise Exception(
+            "_do_logout_via_ui: Không tìm thấy nút user menu bằng bất kỳ selector nào. "
+            "Kiểm tra lại header HTML của app."
+        )
+
+    time.sleep(0.6)  # chờ dropdown animation
     logout_btn = _wait(driver, 5).until(EC.element_to_be_clickable(SEL_LOGOUT_BTN))
     logout_btn.click()
 
