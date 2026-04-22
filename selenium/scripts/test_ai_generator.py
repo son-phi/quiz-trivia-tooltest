@@ -110,10 +110,11 @@ SEL_CHAT_ERROR   = (By.CSS_SELECTOR, ".bg-red-50, .bg-red-900\\/20, [class*='err
 # ── Extra Excel writer for chatbot sheet (not in conftest) ───────────────────
 @pytest.fixture(scope="session")
 def excel_chatbot():
+    # TC_AIChatbot columns: H(8)=Actual DB, I(9)=Actual UI, J(10)=Status, K(11)=Notes
     return ExcelResultWriter(
         xlsx_path=str(_DATA_FILE),
         sheet_name=_CB_SHEET,
-        tc_col=1, status_col=10, actual_ui_col=9, actual_db_col=10,
+        tc_col=1, status_col=10, actual_ui_col=9, actual_db_col=8,
         data_start_row=_CB_START,
     )
 
