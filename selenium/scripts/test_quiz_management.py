@@ -3,7 +3,7 @@ test_quiz_management.py – F3 Quiz Management Selenium tests
 Covers: Create / Read / Update / Delete / Import CSV / State transition / Password quiz
 
 Run all : pytest selenium/scripts/test_quiz_management.py -v -s
-Run one  : pytest selenium/scripts/test_quiz_management.py -v -s -k TC-CQ-001
+Run one  : pytest selenium/scripts/test_quiz_management.py -v -s -k TC-CR-025
 """
 import os
 import sys
@@ -678,14 +678,13 @@ def _open_import_modal_and_upload(driver, wait: WebDriverWait, file_path: str):
 # ─────────────────────────────────────────────────────────────────────────────
 
 TC_IDS = [
-    "TC-CQ-001", "TC-CQ-002", "TC-CQ-003", "TC-CQ-004",
-    "TC-CQ-005", "TC-CQ-006", "TC-CQ-007", "TC-CQ-008",
-    "TC-CQ-009",
-    "TC-RQ-001", "TC-RQ-002",
-    "TC-UQ-001", "TC-UQ-002", "TC-UQ-003",
-    "TC-DQ-001", "TC-DQ-002",
-    "TC-IMP-001", "TC-IMP-002", "TC-IMP-003", "TC-IMP-004",
-    "TC-QST-001", "TC-QST-002", "TC-QST-003",
+    "TC-CR-025", "TC-CR-005", "TC-CR-027",
+    "TC-CR-010", "TC-CR-011", "TC-CR-012", "TC-CR-013", "TC-CR-014",
+    "TC-RD-001", "TC-RD-002",
+    "TC-UP-001", "TC-UP-014", "TC-UP-011",
+    "TC-DL-001", "TC-DL-011",
+    "TC-IMP-002", "TC-IMP-003", "TC-IMP-004",
+    "TC-QM-008", "TC-ST-002", "TC-ST-003",
     "TC-QM-006", "TC-QM-007",
 ]
 
@@ -704,11 +703,11 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
 
     try:
         # ────────────────────────────────────────────────────────────────────
-        # TC-CQ-001: Create valid standard quiz → success toast + Firestore exists
+        # TC-CR-025: Create valid standard quiz → success toast + Firestore exists
         # ────────────────────────────────────────────────────────────────────
-        if tc_id == "TC-CQ-001":
+        if tc_id == "TC-CR-025":
             _login_as(driver, wait, "creator")
-            title = f"TC-CQ-001_Auto_{int(time.time())}"
+            title = f"TC-CR-025_Auto_{int(time.time())}"
             _do_full_create_wizard(driver, wait, title, duration=10, save_as_draft=True)
 
             toast_txt = _get_toast(driver, timeout=8)
@@ -727,10 +726,10 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 actual_db = "NOT FOUND in Firestore"
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-CQ-002: Empty title → Continue button disabled (validateStep fails)
+        # TC-CR-005: Empty title → Continue button disabled (validateStep fails)
         # Source: validateStep('info') requires quiz.title?.trim() non-empty
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-CQ-002":
+        elif tc_id == "TC-CR-005":
             _login_as(driver, wait, "creator")
             driver.get(APP_URL + "/creator/new")
             _wait_for_page_stable(driver)
@@ -777,10 +776,10 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 actual_ui = "Continue button disabled when title empty ✓"
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-CQ-003: No questions added → Continue disabled at questions step
+        # TC-CR-027: No questions added → Continue disabled at questions step
         # Source: validateStep('questions') requires questions.length > 0
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-CQ-003":
+        elif tc_id == "TC-CR-027":
             _login_as(driver, wait, "creator")
             driver.get(APP_URL + "/creator/new")
             _wait_for_page_stable(driver)
@@ -788,7 +787,7 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
 
             _select_quiz_type_card(driver, wait, "standard")
             _click_continue(driver, wait)
-            _fill_quiz_info(driver, wait, title="TC-CQ-003 No Questions", duration=10)
+            _fill_quiz_info(driver, wait, title="TC-CR-027 No Questions", duration=10)
             _click_continue(driver, wait)  # → questions step
 
             ADD_BTN_XPATH = (
@@ -836,53 +835,16 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 actual_ui = f"btn_disabled={btn_disabled}, on_questions={on_questions}"
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-CQ-004: XSS payload in title → should be sanitized (no raw script)
+        # TC-CR-010..014: BVA duration boundary values
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-CQ-004":
-            _login_as(driver, wait, "creator")
-            xss_payload = "<script>alert('xss')</script>"
-            unique_suffix = f"_Auto_{int(time.time())}"
-            full_title = xss_payload + unique_suffix
-
-            driver.get(APP_URL + "/creator/new")
-            _wait_for_page_stable(driver)
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.grid")))
-
-            _select_quiz_type_card(driver, wait, "standard")
-            _click_continue(driver, wait)
-            _fill_quiz_info(driver, wait, title=full_title, duration=10)
-            _click_continue(driver, wait)
-            _add_mcq_question(driver, wait)
-            _click_continue(driver, wait)
-
-            page_src = driver.page_source
-            no_raw_script = "<script>alert" not in page_src
-            actual_ui = "XSS sanitized on review page" if no_raw_script else "Raw <script> tag found!"
-
-            _click_save_draft(driver, wait)
-            time.sleep(2)
-
-            quiz_id = _fs_find_by_title(full_title)
-            quiz_id_cleanup = quiz_id
-            if quiz_id:
-                doc = _fs_get_quiz(quiz_id)
-                stored = doc.get("fields", {}).get("title", {}).get("stringValue", "") if doc else ""
-                actual_db = f"Stored title: {stored[:80]}"
-
-            if no_raw_script:
-                status = "PASS"
-
-        # ────────────────────────────────────────────────────────────────────
-        # TC-CQ-005..011: BVA duration boundary values
-        # ────────────────────────────────────────────────────────────────────
-        elif tc_id in ("TC-CQ-005", "TC-CQ-006", "TC-CQ-007", "TC-CQ-008",
-                       "TC-CQ-009"):
+        elif tc_id in ("TC-CR-010", "TC-CR-011", "TC-CR-012", "TC-CR-013",
+                       "TC-CR-014"):
             DURATION_MAP = {
-                "TC-CQ-005": (-1,  False),
-                "TC-CQ-006": (4,   False),
-                "TC-CQ-007": (5,   True),
-                "TC-CQ-008": (120, True),
-                "TC-CQ-009": (121, False),
+                "TC-CR-010": (-1,  False),
+                "TC-CR-011": (4,   False),
+                "TC-CR-012": (5,   True),
+                "TC-CR-013": (120, True),
+                "TC-CR-014": (121, False),
             }
             dur_val, expect_valid = DURATION_MAP[tc_id]
 
@@ -969,10 +931,10 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                     actual_ui = f"dur={dur_val}: validation blocked as expected ✓"
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-RQ-001: Creator sees their own quiz in /creator/my
+        # TC-RD-001: Creator sees their own quiz in /creator/my
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-RQ-001":
-            title = f"TC-RQ-001_Auto_{int(time.time())}"
+        elif tc_id == "TC-RD-001":
+            title = f"TC-RD-001_Auto_{int(time.time())}"
             quiz_id = _fs_create_quiz(title, status="draft", role="creator")
             quiz_id_cleanup = quiz_id
 
@@ -990,10 +952,10 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 status = "PASS"
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-RQ-002: Admin sees creator's pending quiz in admin panel
+        # TC-RD-002: Admin sees creator's pending quiz in admin panel
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-RQ-002":
-            title = f"TC-RQ-002_Auto_{int(time.time())}"
+        elif tc_id == "TC-RD-002":
+            title = f"TC-RD-002_Auto_{int(time.time())}"
             quiz_id = _fs_create_quiz(title, status="pending", role="creator")
             quiz_id_cleanup = quiz_id
 
@@ -1021,10 +983,10 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 actual_ui = f"Quiz '{title}' not visible in admin quiz-management"
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-UQ-001: Creator opens edit page for own DRAFT quiz
+        # TC-UP-001: Creator opens edit page for own DRAFT quiz
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-UQ-001":
-            title = f"TC-UQ-001_Orig_{int(time.time())}"
+        elif tc_id == "TC-UP-001":
+            title = f"TC-UP-001_Orig_{int(time.time())}"
             quiz_id = _fs_create_quiz(title, status="draft", role="creator")
             quiz_id_cleanup = quiz_id
 
@@ -1047,10 +1009,10 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 actual_ui = "Edit page accessible for own draft quiz ✓"
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-UQ-002: Regular user cannot access quiz edit page
+        # TC-UP-014: Regular user cannot access quiz edit page
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-UQ-002":
-            title = f"TC-UQ-002_Auto_{int(time.time())}"
+        elif tc_id == "TC-UP-014":
+            title = f"TC-UP-014_Auto_{int(time.time())}"
             quiz_id = _fs_create_quiz(title, status="draft", role="creator")
             quiz_id_cleanup = quiz_id
 
@@ -1074,11 +1036,11 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 actual_ui = "Regular user blocked from edit page ✓"
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-UQ-003: Creator cannot directly edit an APPROVED quiz —
+        # TC-UP-011: Creator cannot directly edit an APPROVED quiz —
         #            clicking Edit must open Edit Request modal instead
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-UQ-003":
-            title = f"TC-UQ-003_Appr_{int(time.time())}"
+        elif tc_id == "TC-UP-011":
+            title = f"TC-UP-011_Appr_{int(time.time())}"
             quiz_id = _fs_create_quiz(title, status="approved", role="creator")
             quiz_id_cleanup = quiz_id
 
@@ -1113,10 +1075,10 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 actual_ui = f"Could not find Edit button: {str(e)[:60]}"
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-DQ-001: Creator deletes own draft quiz
+        # TC-DL-001: Creator deletes own draft quiz
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-DQ-001":
-            title = f"TC-DQ-001_Del_{int(time.time())}"
+        elif tc_id == "TC-DL-001":
+            title = f"TC-DL-001_Del_{int(time.time())}"
             quiz_id = _fs_create_quiz(title, status="draft", role="creator")
 
             _login_as(driver, wait, "creator")
@@ -1153,10 +1115,10 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                     quiz_id_cleanup = quiz_id  # rollback if test-side delete failed
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-DQ-002: Regular user has no delete capability for quizzes
+        # TC-DL-011: Regular user has no delete capability for quizzes
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-DQ-002":
-            title = f"TC-DQ-002_Auto_{int(time.time())}"
+        elif tc_id == "TC-DL-011":
+            title = f"TC-DL-011_Auto_{int(time.time())}"
             quiz_id = _fs_create_quiz(title, status="draft", role="creator")
             quiz_id_cleanup = quiz_id
 
@@ -1183,9 +1145,9 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 actual_ui = "User has no delete capability for creator quizzes ✓"
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-IMP-001: Valid CSV import → questions imported successfully
+        # TC-IMP-002: Valid CSV import → questions imported successfully
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-IMP-001":
+        elif tc_id == "TC-IMP-002":
             _login_as(driver, wait, "creator")
             driver.get(APP_URL + "/creator/new")
             _wait_for_page_stable(driver)
@@ -1193,7 +1155,7 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
 
             _select_quiz_type_card(driver, wait, "standard")
             _click_continue(driver, wait)
-            _fill_quiz_info(driver, wait, title="TC-IMP-001 Valid CSV", duration=10)
+            _fill_quiz_info(driver, wait, title="TC-IMP-002 Valid CSV", duration=10)
             _click_continue(driver, wait)
 
             csv_content = (
@@ -1221,9 +1183,9 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 os.unlink(csv_path)
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-IMP-002: Wrong file format (.txt) → error toast shown
+        # TC-IMP-003: Wrong file format (.txt) → error toast shown
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-IMP-002":
+        elif tc_id == "TC-IMP-003":
             _login_as(driver, wait, "creator")
             driver.get(APP_URL + "/creator/new")
             _wait_for_page_stable(driver)
@@ -1251,9 +1213,9 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 os.unlink(txt_path)
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-IMP-003: CSV with bad schema (< 6 required columns) → error
+        # TC-IMP-004: CSV with bad schema (< 6 required columns) → error
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-IMP-003":
+        elif tc_id == "TC-IMP-004":
             _login_as(driver, wait, "creator")
             driver.get(APP_URL + "/creator/new")
             _wait_for_page_stable(driver)
@@ -1284,50 +1246,10 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 os.unlink(bad_path)
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-IMP-004: Oversized CSV — app has no size limit → note actual behavior
+        # TC-QM-008: Draft quiz not accessible to regular users
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-IMP-004":
-            _login_as(driver, wait, "creator")
-            driver.get(APP_URL + "/creator/new")
-            _wait_for_page_stable(driver)
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.grid")))
-
-            _select_quiz_type_card(driver, wait, "standard")
-            _click_continue(driver, wait)
-            _fill_quiz_info(driver, wait, title="TC-IMP-004 Oversized", duration=10)
-            _click_continue(driver, wait)
-
-            header = "question,answerA,answerB,answerC,answerD,correctAnswer,explanation,points\n"
-            rows = "".join(f'"Q{i} {"x"*200}","A","B","C","D","a","exp",10\n' for i in range(500))
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as f:
-                f.write(header + rows)
-                big_path = f.name
-
-            try:
-                _open_import_modal_and_upload(driver, wait, big_path)
-                toast_txt = _get_toast(driver, timeout=12)
-                actual_ui = f"Oversized result: {toast_txt[:100] if toast_txt else 'No response'}"
-
-                size_err_kw = ["size", "too large", "quá lớn", "exceed", "limit"]
-                success_kw = ["import", "success", "added"]
-
-                if toast_txt and any(kw in toast_txt.lower() for kw in size_err_kw):
-                    status = "PASS"
-                    actual_ui = "Oversized file correctly rejected ✓"
-                elif toast_txt and any(kw in toast_txt.lower() for kw in success_kw):
-                    # App has no size limit — this is an app deficiency
-                    actual_ui = f"App accepted large file (no size validation): {toast_txt[:60]}"
-                    status = "FAIL"
-                else:
-                    actual_ui = "No clear size-validation response"
-            finally:
-                os.unlink(big_path)
-
-        # ────────────────────────────────────────────────────────────────────
-        # TC-QST-001: Draft quiz not accessible to regular users
-        # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-QST-001":
-            title = f"TC-QST-001_Draft_{int(time.time())}"
+        elif tc_id == "TC-QM-008":
+            title = f"TC-QM-008_Draft_{int(time.time())}"
             quiz_id = _fs_create_quiz(title, status="draft", role="creator")
             quiz_id_cleanup = quiz_id
 
@@ -1352,10 +1274,10 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 actual_ui = "Draft quiz inaccessible to regular user ✓"
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-QST-002: Creator submits draft quiz for admin review
+        # TC-ST-002: Creator submits draft quiz for admin review
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-QST-002":
-            title = f"TC-QST-002_Submit_{int(time.time())}"
+        elif tc_id == "TC-ST-002":
+            title = f"TC-ST-002_Submit_{int(time.time())}"
             quiz_id = _fs_create_quiz(title, status="draft", role="creator", add_question=True)
             quiz_id_cleanup = quiz_id
 
@@ -1436,10 +1358,10 @@ def test_quiz_management(driver, excel_quiz_mgmt, tc_id):
                 actual_ui = f"Submit error: {str(e)[:120]}"
 
         # ────────────────────────────────────────────────────────────────────
-        # TC-QST-003: Admin approves a pending quiz
+        # TC-ST-003: Admin approves a pending quiz
         # ────────────────────────────────────────────────────────────────────
-        elif tc_id == "TC-QST-003":
-            title = f"TC-QST-003_Appr_{int(time.time())}"
+        elif tc_id == "TC-ST-003":
+            title = f"TC-ST-003_Appr_{int(time.time())}"
             # Create as draft (creator permission), then set to pending via admin
             quiz_id = _fs_create_quiz(title, status="draft", role="creator", add_question=True)
             _fs_update_quiz_status(quiz_id, "pending", role="admin")

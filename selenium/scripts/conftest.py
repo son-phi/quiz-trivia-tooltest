@@ -178,5 +178,5 @@ def excel_ai():
     return ExcelResultWriter(
         xlsx_path=os.path.join(BASE_DIR, "data", "TC_AIFeatures.xlsx"),
         sheet_name="TC_AIGenerator",
-        status_col=11, actual_ui_col=8, actual_db_col=9, data_start_row=6,
+        status_col=13, actual_ui_col=11, actual_db_col=12, data_start_row=6,
     )

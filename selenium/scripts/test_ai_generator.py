@@ -711,7 +711,7 @@ def _tc_gen_valid_prompt(driver, tc: dict) -> tuple[str, str, str]:
     # DB schema check (TC-GEN-010): verify question objects have required fields
     # We can only check via the preview UI (Firestore not written yet)
     schema_check = "N/A"
-    if tc["tc_id"] == "TC-GEN-010":
+    if tc["tc_id"] == "TC-AQZ-009":
         cards = driver.find_elements(*SEL_PREVIEW_CARD)
         schema_check = f"Found {len(cards)} question cards with text visible in preview"
 
@@ -834,6 +834,40 @@ def _tc_gen_off_by_one(driver, tc: dict) -> tuple[str, str, str]:
     return ("PASS" if passed else "FAIL"), actual_ui, actual_db
 
 
+def _upload_file_to_modal(driver, file_path: Path) -> tuple[bool, str]:
+    """Click 'Upload File' tab, wait for input to render, unhide it, send file path.
+    Returns (success, error_message).
+    """
+    try:
+        driver.execute_script(
+            "var btns = Array.from(document.querySelectorAll('button'));"
+            "var btn = btns.find(b => b.textContent.includes('Upload File') || b.textContent.includes('Tải file lên'));"
+            "if (btn) btn.click(); else throw new Error('tab not found');"
+        )
+        # Wait for file input to appear in DOM
+        file_input = _wait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
+        )
+        driver.execute_script(
+            "arguments[0].style.display='block';"
+            "arguments[0].style.opacity='1';"
+            "arguments[0].style.visibility='visible';",
+            file_input,
+        )
+        time.sleep(0.3)
+        file_input.send_keys(str(file_path))
+        # Trigger both 'input' and 'change' so React synthetic event fires
+        driver.execute_script(
+            "arguments[0].dispatchEvent(new Event('input',  {bubbles: true}));"
+            "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
+            file_input,
+        )
+        time.sleep(1.5)
+        return True, ""
+    except Exception as e:
+        return False, f"File upload mode not accessible: {e}"
+
+
 def _tc_gen_large_file(driver, tc: dict) -> tuple[str, str, str]:
     """TC-GEN-007: File > 5MB → no client guard (known bug)."""
     large_pdf = Path(__file__).resolve().parents[2] / "data" / "sample_pdf_large.pdf"
@@ -851,18 +885,18 @@ def _tc_gen_large_file(driver, tc: dict) -> tuple[str, str, str]:
     if not _open_ai_modal(driver):
         return "FAIL", "AI modal did not open", "N/A"
 
-    # Switch to file mode
-    try:
-        file_btn = driver.find_element(By.XPATH, "//button[contains(text(),'Upload File')]")
-        file_btn.click()
-        time.sleep(0.5)
-        file_input = driver.find_element(By.CSS_SELECTOR, "input[type='file']")
-        file_input.send_keys(str(large_pdf))
-        time.sleep(0.5)
-    except NoSuchElementException:
-        return "FAIL", "File upload mode not accessible", "N/A"
+    ok, err = _upload_file_to_modal(driver, large_pdf)
+    if not ok:
+        return "FAIL", err, "N/A"
 
-    _click_generate(driver)
+    try:
+        _click_generate(driver)
+    except TimeoutException:
+        return (
+            "FAIL",
+            "Generate button did not become clickable after large file upload",
+            "TIMEOUT: Generate button stayed disabled — React onChange may not have fired via send_keys",
+        )
     toast = _toast(driver, timeout=15)
     actual_ui = f"Toast after large file submit: '{toast}'"
     actual_db = "No data saved (large file should be rejected)"
@@ -952,17 +986,20 @@ def _tc_gen_pdf_valid(driver, tc: dict) -> tuple[str, str, str]:
     if not _open_ai_modal(driver):
         return "FAIL", "AI modal did not open", "N/A"
 
-    try:
-        file_btn = driver.find_element(By.XPATH, "//button[contains(text(),'Upload File')]")
-        file_btn.click()
-        time.sleep(0.5)
-        file_input = driver.find_element(By.CSS_SELECTOR, "input[type='file']")
-        file_input.send_keys(str(sample_pdf))
-        time.sleep(0.5)
-    except NoSuchElementException:
-        return "FAIL", "File upload mode not accessible", "N/A"
+    ok, err = _upload_file_to_modal(driver, sample_pdf)
+    if not ok:
+        return "FAIL", err, "N/A"
 
-    _click_generate(driver)
+    try:
+        _click_generate(driver)
+    except TimeoutException:
+        return (
+            "FAIL",
+            "Generate button did not become clickable after file upload (React state not updated)",
+            "TIMEOUT: file selected via Selenium send_keys but Generate button stayed disabled — "
+            "likely React onChange not triggered; try clicking 'Select File' manually to confirm",
+        )
+
     count = _wait_for_preview(driver, timeout=120)
     toast = _toast(driver)
     actual_ui = f"PDF upload → {count} question(s) in preview. Toast: '{toast}'"
@@ -974,16 +1011,16 @@ def _tc_gen_pdf_valid(driver, tc: dict) -> tuple[str, str, str]:
 
 # ── Generator dispatch ────────────────────────────────────────────────────────
 _GEN_HANDLERS = {
-    "TC-GEN-001": _tc_gen_valid_prompt,
-    "TC-GEN-002": _tc_gen_pdf_valid,
-    "TC-GEN-003": _tc_gen_empty_prompt,
-    "TC-GEN-004": _tc_gen_long_prompt,
-    "TC-GEN-005": _tc_gen_30_questions,
-    "TC-GEN-006": _tc_gen_off_by_one,
-    "TC-GEN-007": _tc_gen_large_file,
-    "TC-GEN-008": _tc_gen_user_blocked,
-    "TC-GEN-009": _tc_gen_zero_question_types,
-    "TC-GEN-010": _tc_gen_valid_prompt,  # same flow + schema check
+    "TC-AQZ-001": _tc_gen_valid_prompt,
+    "TC-AQZ-002": _tc_gen_empty_prompt,
+    "TC-AQZ-004": _tc_gen_pdf_valid,
+    "TC-AQZ-009": _tc_gen_valid_prompt,  # same flow + schema check
+    "TC-AQZ-010": _tc_gen_user_blocked,
+    "TC-AQZ-011": _tc_gen_zero_question_types,
+    "TC-AQZ-015": _tc_gen_long_prompt,
+    "TC-AQZ-017": _tc_gen_large_file,
+    "TC-AQZ-019": _tc_gen_off_by_one,
+    "TC-AQZ-020": _tc_gen_30_questions,
 }
 
 
